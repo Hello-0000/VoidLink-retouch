@@ -22,5 +22,15 @@
 + (UIColor *)lowProfileGray;
 + (UIColor *)textTintColorWithAlpha;
 
+// Settings sidebar tokens. Dynamic colors that resolve against the view's
+// trait collection (dark / light); used only by the settings sidebar.
++ (UIColor *)sidebarBackground;
++ (UIColor *)sidebarCard;
++ (UIColor *)sidebarControlFill;   // switch off-state, slider track, segmented background
++ (UIColor *)sidebarSeparator;
++ (UIColor *)sidebarTextPrimary;
++ (UIColor *)sidebarTextSecondary;
++ (UIColor *)sidebarAccent;
+
 @end
 

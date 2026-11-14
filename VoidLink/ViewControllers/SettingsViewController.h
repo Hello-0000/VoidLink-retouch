@@ -31,13 +31,9 @@
 @property (strong, nonatomic) IBOutlet UIStackView *touchMoveEventIntervalStack;
 @property (strong, nonatomic) IBOutlet UIStackView *mousePointerVelocityStack;
 @property (strong, nonatomic) IBOutlet UIStackView *onScreenWidgetStack;
-@property (strong, nonatomic) IBOutlet UIStackView *softKeyboardGestureStack;
-@property (strong, nonatomic) IBOutlet UISegmentedControl *softKeyboardGestureSelector;
 @property (strong, nonatomic) IBOutlet UIStackView *liftStreamViewForKeyboardStack;
 @property (strong, nonatomic) IBOutlet UIStackView *softKeyboardToolbarStack;
 @property (strong, nonatomic) IBOutlet UISwitch *softKeyboardToolbarSwitch;
-@property (strong, nonatomic) IBOutlet UIStackView *slideToSettingsScreenEdgeStack;
-@property (strong, nonatomic) IBOutlet UIStackView *slideToToolboxScreenEdgeStack;
 @property (strong, nonatomic) IBOutlet UIStackView *slideToSettingsDistanceStack;
 @property (strong, nonatomic) IBOutlet UIStackView *optimizeGamesStack;
 @property (strong, nonatomic) IBOutlet UIStackView *multiControllerStack;
@@ -83,12 +79,9 @@
 @property (strong, nonatomic) IBOutlet UISegmentedControl *statsOverlaySelector;
 @property (strong, nonatomic) IBOutlet UIScrollView *scrollView;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *liftStreamViewForKeyboardSelector;
-@property (strong, nonatomic) IBOutlet UISegmentedControl *slideToSettingsScreenEdgeSelector;
 
 @property (strong, nonatomic) IBOutlet UILabel *touchMoveEventIntervalLabel;
 @property (strong, nonatomic) IBOutlet UISlider *touchMoveEventIntervalSlider;
-@property (strong, nonatomic) IBOutlet UILabel *slideToSettingsScreenEdgeUILabel;
-@property (strong, nonatomic) IBOutlet UISegmentedControl *slideToToolboxScreenEdgeSelector;
 @property (strong, nonatomic) IBOutlet UILabel *slideToSettingsDistanceUILabel;
 @property (strong, nonatomic) IBOutlet UISlider *slideToMenuDistanceSlider;
 @property (strong, nonatomic) IBOutlet UISlider *pointerVelocityModeDividerSlider;

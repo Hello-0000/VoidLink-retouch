@@ -144,5 +144,56 @@ static UIUserInterfaceStyle _userInterfaceStyle;
     return [UIColor colorWithRed:0.65 green:0.65 blue:0.65 alpha:0.4];
 }
 
+#pragma mark - Settings sidebar tokens
+
+static UIColor *VLSidebarColor(UIColor *dark, UIColor *light) {
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        return traits.userInterfaceStyle == UIUserInterfaceStyleLight ? light : dark;
+    }];
+}
+
+static UIColor *VLHex(uint32_t rgb) {
+    return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0 green:((rgb >> 8) & 0xFF) / 255.0 blue:(rgb & 0xFF) / 255.0 alpha:1.0];
+}
+
++ (UIColor *)sidebarBackground {
+    static UIColor *color; static dispatch_once_t once;
+    dispatch_once(&once, ^{ color = VLSidebarColor(VLHex(0x111214), VLHex(0xF2F2F7)); });
+    return color;
+}
+
++ (UIColor *)sidebarCard {
+    static UIColor *color; static dispatch_once_t once;
+    dispatch_once(&once, ^{ color = VLSidebarColor(VLHex(0x1C1D20), VLHex(0xFFFFFF)); });
+    return color;
+}
+
++ (UIColor *)sidebarControlFill {
+    static UIColor *color; static dispatch_once_t once;
+    dispatch_once(&once, ^{ color = VLSidebarColor(VLHex(0x2C2D31), VLHex(0xE5E5EA)); });
+    return color;
+}
+
++ (UIColor *)sidebarSeparator {
+    static UIColor *color; static dispatch_once_t once;
+    dispatch_once(&once, ^{ color = VLSidebarColor([UIColor colorWithWhite:1.0 alpha:0.08], [UIColor colorWithWhite:0.0 alpha:0.08]); });
+    return color;
+}
+
++ (UIColor *)sidebarTextPrimary {
+    static UIColor *color; static dispatch_once_t once;
+    dispatch_once(&once, ^{ color = VLSidebarColor(VLHex(0xF2F2F5), VLHex(0x000000)); });
+    return color;
+}
+
++ (UIColor *)sidebarTextSecondary {
+    static UIColor *color; static dispatch_once_t once;
+    dispatch_once(&once, ^{ color = VLSidebarColor(VLHex(0x9A9BA3), VLHex(0x6C6C70)); });
+    return color;
+}
+
++ (UIColor *)sidebarAccent {
+    return [UIColor systemBlueColor];
+}
 
 @end

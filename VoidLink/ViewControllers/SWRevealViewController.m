@@ -147,7 +147,7 @@ static CGFloat scaledValue( CGFloat v1, CGFloat min2, CGFloat max2, CGFloat min1
     _rearNavView.translatesAutoresizingMaskIntoConstraints = NO;
     _safeAreaPadding.translatesAutoresizingMaskIntoConstraints = NO;
     // _rearNavView.backgroundColor = [UIColor lightGrayColor]; // 设置背景色以便查看
-    _safeAreaPadding.backgroundColor = [ThemeManager appBackgroundColor];
+    _safeAreaPadding.backgroundColor = [ThemeManager sidebarBackground]; // matches the settings sidebar
     
     // NSLog(@"_c.rearViewRevealWidth: %f", _c.rearViewRevealWidth);
     // _rearNavView.frame = CGRectMake(0, 0, _c.rearViewRevealWidth, 100);
@@ -946,10 +946,10 @@ const int FrontViewPositionNone = 0xff;
     if (@available(iOS 13.0, *)) {
         UINavigationBarAppearance *navBarAppearanceStandard = [[UINavigationBarAppearance alloc] init];
         [navBarAppearanceStandard configureWithOpaqueBackground]; // 不透明
-        navBarAppearanceStandard.backgroundColor =[ThemeManager appBackgroundColor];; // 设置你需要的背景色
+        navBarAppearanceStandard.backgroundColor = [ThemeManager sidebarBackground]; // matches the settings sidebar
         navBarAppearanceStandard.shadowColor = nil; // 去掉底部分割线（可选）
         navBarAppearanceStandard.titleTextAttributes = @{
-            NSForegroundColorAttributeName: [ThemeManager textColor]
+            NSForegroundColorAttributeName: [ThemeManager sidebarTextPrimary]
         };
         navBarAppearanceStandard.shadowColor = [UIColor clearColor];
         navBarAppearanceStandard.backgroundImage = nil;
@@ -974,7 +974,6 @@ const int FrontViewPositionNone = 0xff;
     // navItem.rightBarButtonItem = _disconnectButton;
     
     [_dockedNavBar setItems:@[_navItem]];
-    _dockedNavBar.titleTextAttributes = @{NSForegroundColorAttributeName: [UIColor whiteColor]};
     
     [_dockedNavBar removeFromSuperview];
     [_contentView.rearNavView addSubview:_dockedNavBar];

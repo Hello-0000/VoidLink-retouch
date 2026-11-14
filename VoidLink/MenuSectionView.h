@@ -16,7 +16,11 @@
 - (SettingsMenuMode)getSettingsMenuMode;
 @end
 
+// Inner left/right padding of a settings card; rows and separators line up on it.
+extern const CGFloat MenuSectionRowInset;
 
+// One settings group: a header (icon, title, fold chevron) above a rounded
+// card holding the rows. Rows are separated by hairlines inside the card.
 @interface MenuSectionView : UIView
 
 // 外部可访问属性
@@ -33,11 +37,17 @@
 
 // 方法
 - (void)setSectionWithIcon:(UIImage *)icon andSize:(CGFloat)size;
-- (void)addSubStackView:(UIStackView *)stackView;
+- (void)addSubStackView:(UIStackView *)stack;
 - (void)addToParentStack:(UIStackView *)parentStack;
 - (void)removeSubStackView:(UIStackView *)stackView;
 - (void)updateLayout;
 - (void)updateViewForFoldState;
 
+// Row metrics shared by sections and the favorites list: vertical padding,
+// 44pt minimum height, a 16pt leading indent for dependent rows, controls
+// centered in single-line rows. Safe to call repeatedly.
++ (void)styleRow:(UIStackView *)row indented:(BOOL)indented;
+// Shows a hairline above every visible row except the first one in `container`.
++ (void)refreshSeparatorsInStack:(UIStackView *)container;
 
 @end

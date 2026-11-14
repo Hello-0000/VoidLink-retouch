@@ -70,7 +70,16 @@
             @"Gesture Trigger Off": @"禁用",
             @"Not Set": @"未设置",
             @"Custom Command…": @"自定义指令…",
-            @"Invalid Command": @"无效指令"
+            @"Invalid Command": @"无效指令",
+            @"Settings Section: Display": @"画面",
+            @"Settings Section: Touch": @"触控",
+            @"Settings Section: On-Screen Controls": @"屏幕控件",
+            @"Settings Section: Controller": @"手柄",
+            @"Settings Section: Apple Pencil": @"Apple Pencil",
+            @"Settings Section: Mouse & Keyboard": @"鼠标与键盘",
+            @"Settings Section: General": @"通用",
+            @"Controller: Swap A/B": @"实体手柄：交换 A/B",
+            @"Controller: Swap X/Y": @"实体手柄：交换 X/Y"
         };
         enDict = @{
             @"PairingHelpTitle": @"Pairing Help",
@@ -108,7 +117,16 @@
             @"Gesture Trigger Off": @"Off",
             @"Not Set": @"Not Set",
             @"Custom Command…": @"Custom Command…",
-            @"Invalid Command": @"Invalid Command"
+            @"Invalid Command": @"Invalid Command",
+            @"Settings Section: Display": @"Display",
+            @"Settings Section: Touch": @"Touch",
+            @"Settings Section: On-Screen Controls": @"On-Screen Controls",
+            @"Settings Section: Controller": @"Controller",
+            @"Settings Section: Apple Pencil": @"Apple Pencil",
+            @"Settings Section: Mouse & Keyboard": @"Mouse & Keyboard",
+            @"Settings Section: General": @"General",
+            @"Controller: Swap A/B": @"Controller: Swap A/B",
+            @"Controller: Swap X/Y": @"Controller: Swap X/Y"
         };
     });
     return [prefix isEqualToString:@"zh"] ? zhDict : enDict;

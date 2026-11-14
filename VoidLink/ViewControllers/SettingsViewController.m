@@ -27,8 +27,111 @@
 #import "GameAspectMemory.h"
 #import "StreamGestureBindings.h"
 
+static NSString *const VLPullDownButtonIdentifier = @"pullDownButton";
+
+static UIButtonConfiguration *VLPullDownButtonConfiguration(NSString *symbolName) {
+    UIButtonConfiguration *config = [UIButtonConfiguration plainButtonConfiguration];
+    config.image = [UIImage systemImageNamed:symbolName
+                           withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold]];
+    config.imagePlacement = NSDirectionalRectEdgeTrailing;
+    config.imagePadding = 6;
+    config.baseForegroundColor = [ThemeManager sidebarAccent];
+    config.contentInsets = NSDirectionalEdgeInsetsMake(6, 8, 6, 0);
+    config.titleLineBreakMode = NSLineBreakByTruncatingTail;
+    return config;
+}
+
+static void VLSetPullDownTitle(UIButton *button, NSString *title) {
+    UIButtonConfiguration *config = button.configuration;
+    config.attributedTitle = [[NSAttributedString alloc] initWithString:title ?: @""
+                                                             attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:17]}];
+    button.configuration = config;
+}
+
+// Stands in for a UISegmentedControl whose options don't fit on one line.
+// The segmented control stays the model: hidden, still holding the selection
+// and still wired to its targets, so every caller keeps reading and setting
+// selectedSegmentIndex / enabled. The button mirrors it through KVO, and the
+// menu is rebuilt each time it opens so per-segment enabled state is current.
+@interface VLSegmentPullDownButton : UIButton
+@property (nonatomic, strong) UISegmentedControl *segmentedControl;
+- (void)refreshFromSegmentedControl;
+@end
+
+@implementation VLSegmentPullDownButton
+
+static void *VLSegmentPullDownKVOContext = &VLSegmentPullDownKVOContext;
+
+- (void)setSegmentedControl:(UISegmentedControl *)segmentedControl {
+    if (_segmentedControl) {
+        [_segmentedControl removeObserver:self forKeyPath:@"selectedSegmentIndex" context:VLSegmentPullDownKVOContext];
+        [_segmentedControl removeObserver:self forKeyPath:@"enabled" context:VLSegmentPullDownKVOContext];
+    }
+    _segmentedControl = segmentedControl;
+    if (!segmentedControl) return;
+    [segmentedControl addObserver:self forKeyPath:@"selectedSegmentIndex" options:0 context:VLSegmentPullDownKVOContext];
+    [segmentedControl addObserver:self forKeyPath:@"enabled" options:0 context:VLSegmentPullDownKVOContext];
+    __weak typeof(self) weakSelf = self;
+    UIDeferredMenuElement *items = [UIDeferredMenuElement elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement *> *)) {
+        completion([weakSelf menuItems] ?: @[]);
+    }];
+    self.menu = [UIMenu menuWithTitle:@"" children:@[items]];
+    self.showsMenuAsPrimaryAction = YES;
+    [self refreshFromSegmentedControl];
+}
+
+- (NSArray<UIMenuElement *> *)menuItems {
+    UISegmentedControl *segmented = self.segmentedControl;
+    NSMutableArray<UIMenuElement *> *items = [NSMutableArray array];
+    for (NSInteger i = 0; i < (NSInteger)segmented.numberOfSegments; i++) {
+        NSString *title = [segmented titleForSegmentAtIndex:i];
+        if (title.length == 0) continue;
+        __weak typeof(self) weakSelf = self;
+        UIAction *item = [UIAction actionWithTitle:title image:nil identifier:nil handler:^(__kindof UIAction *action) {
+            UISegmentedControl *control = weakSelf.segmentedControl;
+            if (!control || control.selectedSegmentIndex == i) return;
+            control.selectedSegmentIndex = i;
+            [control sendActionsForControlEvents:UIControlEventValueChanged];
+            [weakSelf refreshFromSegmentedControl];
+        }];
+        item.state = segmented.selectedSegmentIndex == i ? UIMenuElementStateOn : UIMenuElementStateOff;
+        if (![segmented isEnabledForSegmentAtIndex:i]) item.attributes = UIMenuElementAttributesDisabled;
+        [items addObject:item];
+    }
+    return items;
+}
+
+- (void)refreshFromSegmentedControl {
+    UISegmentedControl *segmented = self.segmentedControl;
+    NSInteger index = segmented.selectedSegmentIndex;
+    NSString *title = (index >= 0 && index < (NSInteger)segmented.numberOfSegments) ? [segmented titleForSegmentAtIndex:index] : @"";
+    VLSetPullDownTitle(self, title);
+    self.enabled = segmented.isEnabled;
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (context != VLSegmentPullDownKVOContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    [self refreshFromSegmentedControl];
+}
+
+- (void)dealloc {
+    self.segmentedControl = nil;
+}
+
+@end
+
 @implementation SettingsViewController {
     UISwitch *_streamTouchBlockSwitch;
+    UIStackView *_streamTouchBlockStack;
+    UIStackView *_swapXyStack;
+    // Rows that depend on the row above them: indented 16pt in their group.
+    NSSet<NSString *> *_childStackIdentifiers;
+    NSMapTable<UIButton *, NSLayoutConstraint *> *_infoButtonLeadingConstraints;
+    NSHashTable<VLSegmentPullDownButton *> *_pullDownButtons; // weak
+    BOOL _settingsLayoutRefreshScheduled;
     UISwitch *_audioFollowsModeSwitch;
     NSLayoutConstraint *parentStackLeadingConstraint;
     NSLayoutConstraint *parentStackWidthConstraint;
@@ -47,6 +150,7 @@
     CGFloat _scrollSpeed;
     CGFloat _currentRefreshRate;
     MenuSectionView *touchAndControlSection;
+    MenuSectionView *controllerSection;
     MenuSectionView *videoSection;
     MenuSectionView *otherSection;
     MenuSectionView *experimentalSection;
@@ -271,6 +375,7 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
     
     // Add a bit of padding so the view doesn't end right at the button of the display
     self.scrollView.contentSize = CGSizeMake(self.scrollView.contentSize.width, _parentStack.frame.size.height + [self getStandardNavBarHeight] + 20);
+    [self updateInfoButtonPositions];
     double delayInSeconds = 3;
     // Convert the delay into a dispatch_time_t value
     dispatch_time_t delayTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayInSeconds * NSEC_PER_SEC));
@@ -411,6 +516,15 @@ BOOL isCustomResolution(int resolutionSelected) {
     _parentStack.axis = UILayoutConstraintAxisVertical;
     _parentStack.spacing = 0;
     _parentStack.translatesAutoresizingMaskIntoConstraints = NO;
+    // Favorites list the rows directly, so the list itself is the one card;
+    // in All mode each MenuSectionView draws its own card.
+    if (currentSettingsMenuMode != AllSettings) {
+        _parentStack.backgroundColor = [ThemeManager sidebarCard];
+        _parentStack.layer.cornerRadius = 12;
+        _parentStack.layer.cornerCurve = kCACornerCurveContinuous;
+        _parentStack.layoutMargins = UIEdgeInsetsMake(4, MenuSectionRowInset, 4, MenuSectionRowInset);
+        _parentStack.layoutMarginsRelativeArrangement = YES;
+    }
     [self.scrollView addSubview:_parentStack];
     
     [NSLayoutConstraint activateConstraints:@[
@@ -429,7 +543,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     if(![self isIPhone]){
         [NSLayoutConstraint activateConstraints:@[
             [_parentStack.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor constant: 0], //mark: settingMenuLayout
-            [_parentStack.widthAnchor constraintEqualToAnchor:self.view.widthAnchor constant:-20] // section width adjusted here
+            [_parentStack.widthAnchor constraintEqualToAnchor:self.view.widthAnchor constant:-24] // cards sit 12pt in from the sidebar edges
         ]];
         return;
     }
@@ -442,11 +556,11 @@ BOOL isCustomResolution(int resolutionSelected) {
         switch (currentOrientation) {
             case UIInterfaceOrientationLandscapeRight:
                 parentStackLeadingConstraint = [_parentStack.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:0];
-                parentStackWidthConstraint = [_parentStack.widthAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-10];
+                parentStackWidthConstraint = [_parentStack.widthAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-12];
                 break;
             default:
-                parentStackLeadingConstraint = [_parentStack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:10];
-                parentStackWidthConstraint = [_parentStack.widthAnchor constraintEqualToAnchor:self.view.widthAnchor constant:-20];
+                parentStackLeadingConstraint = [_parentStack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:12];
+                parentStackWidthConstraint = [_parentStack.widthAnchor constraintEqualToAnchor:self.view.widthAnchor constant:-24];
                 break;
         }
         [NSLayoutConstraint activateConstraints:@[parentStackLeadingConstraint, parentStackWidthConstraint]];
@@ -479,20 +593,41 @@ BOOL isCustomResolution(int resolutionSelected) {
     return label;
 }
 
-- (void)hideOverlappedDynamicLabelWithinStack:(UIStackView* )stack{
-    UILabel* label1 = [self findDynamicLabelFromStack:stack];
-    for(UIView* view in stack.subviews){
-        if([view isKindOfClass:[UILabel class]] && view != label1){
-            UILabel* label2 = (UILabel* )view;
-            CGRect textRect1 = [label1 textRectForBounds:label1.bounds limitedToNumberOfLines:label1.numberOfLines];
-            CGRect textRect2 = [label2 textRectForBounds:label2.bounds limitedToNumberOfLines:label2.numberOfLines];
-            CGRect textRect1InLabel2 = [label2 convertRect:textRect1 fromView:label1];
-            if(CGRectIntersectsRect(textRect1InLabel2, textRect2)){
-                label1.hidden = YES;return;
-            }
+// The row's title: the stack's first label, or the first label of its first
+// nested row (pull-down rows and label + switch rows).
+- (UILabel *)titleLabelForStack:(UIStackView *)stack {
+    UIView *first = stack.arrangedSubviews.firstObject;
+    if ([first isKindOfClass:[UILabel class]]) return (UILabel *)first;
+    if ([first isKindOfClass:[UIStackView class]]) {
+        for (UIView *view in ((UIStackView *)first).arrangedSubviews) {
+            if ([view isKindOfClass:[UILabel class]]) return (UILabel *)view;
         }
     }
-    label1.hidden = NO;
+    return nil;
+}
+
+- (CGFloat)textWidthOfLabel:(UILabel *)label {
+    NSString *text = [label.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (text.length == 0 || !label.font) return 0;
+    CGFloat width = ceil([text sizeWithAttributes:@{NSFontAttributeName: label.font}].width);
+    if (label.bounds.size.width > 0) width = MIN(width, label.bounds.size.width);
+    return width;
+}
+
+// The value label sits at the right end of the title line; hide it when the
+// title (and its ⓘ) would run into it.
+- (void)hideOverlappedDynamicLabelWithinStack:(UIStackView* )stack{
+    UILabel* valueLabel = [self findDynamicLabelFromStack:stack];
+    UILabel* titleLabel = [self titleLabelForStack:stack];
+    if (!valueLabel || !titleLabel || valueLabel.text.length == 0) return;
+    if (CGRectIsEmpty(valueLabel.bounds) || CGRectIsEmpty(titleLabel.bounds)) return; // not laid out yet
+    CGRect titleFrame = [stack convertRect:titleLabel.bounds fromView:titleLabel];
+    CGFloat titleEnd = CGRectGetMinX(titleFrame) + [self textWidthOfLabel:titleLabel];
+    UIButton* infoButton = [self findInfoButtonFromStack:stack];
+    if (infoButton && !infoButton.hidden) titleEnd = MAX(titleEnd, CGRectGetMaxX(infoButton.frame));
+    CGRect valueFrame = [stack convertRect:valueLabel.bounds fromView:valueLabel];
+    CGFloat valueStart = CGRectGetMaxX(valueFrame) - [self textWidthOfLabel:valueLabel];
+    valueLabel.hidden = valueStart < titleEnd + 8;
 }
 
 - (UIView *)findCommonSuperViewFor:(UIView *)view1 andView:(UIView *)view2 {
@@ -516,6 +651,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 - (void)hideOverlappedDynamicLabels{
+    [self updateInfoButtonPositions];
     [self hideDynamicLabelsWhenOverlapped:self.parentStack];
 }
 
@@ -532,43 +668,111 @@ BOOL isCustomResolution(int resolutionSelected) {
     }
 }
 
+- (UIButton *)findPullDownButtonInStack:(UIStackView *)stack {
+    UIView *first = stack.arrangedSubviews.firstObject;
+    if (![first isKindOfClass:[UIStackView class]]) return nil;
+    for (UIView *view in ((UIStackView *)first).arrangedSubviews) {
+        if ([view isKindOfClass:[UIButton class]] && [view.accessibilityIdentifier isEqualToString:VLPullDownButtonIdentifier]) return (UIButton *)view;
+    }
+    return nil;
+}
+
+// Value shown at the right end of the row's title line ("20.0 Mbps"); on a
+// pull-down row it sits just left of the pull-down.
 - (void)addDynamicLabelForStack:(UIStackView* )stack{
     UILabel* label = [self findDynamicLabelFromStack:stack];
     if(label) return;
-    
-    UIButton* button = [self findInfoButtonFromStack:stack];
-    label = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 50)];
-    label.textAlignment = NSTextAlignmentCenter;
-    // label.adjustsFontSizeToFitWidth = YES;
+    UIView *titleLine = stack.arrangedSubviews.firstObject;
+    if (!titleLine) return;
+
+    label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.textAlignment = NSTextAlignmentRight;
     label.accessibilityIdentifier = @"dynamicLabel";
-    label.textColor = [ThemeManager appPrimaryColor];
-    label.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    label.textColor = [ThemeManager sidebarTextSecondary];
+    label.font = [UIFont monospacedDigitSystemFontOfSize:16 weight:UIFontWeightRegular];
+    label.userInteractionEnabled = NO;
     label.translatesAutoresizingMaskIntoConstraints = NO;
     [stack addSubview:label];
-    if(button){
-        [NSLayoutConstraint activateConstraints:@[
-            [label.trailingAnchor constraintEqualToAnchor:button.leadingAnchor constant:-5],
-            //[label.centerYAnchor constraintEqualToAnchor:stack.arrangedSubviews[0].centerYAnchor],
-            [label.bottomAnchor constraintEqualToAnchor:stack.arrangedSubviews[0].bottomAnchor],
-            [label.heightAnchor constraintEqualToAnchor:stack.arrangedSubviews[0].heightAnchor],
-            [label.widthAnchor constraintEqualToConstant:150],
-        ]];
-    }
-    else{
-        [NSLayoutConstraint activateConstraints:@[
-            [label.trailingAnchor constraintEqualToAnchor:stack.trailingAnchor constant:-5],
-            [label.heightAnchor constraintEqualToAnchor:stack.arrangedSubviews[0].heightAnchor],
-            [label.widthAnchor constraintEqualToConstant:150],
-        ]];
-    }
+    UIButton *pullDown = [self findPullDownButtonInStack:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        pullDown ? [label.trailingAnchor constraintEqualToAnchor:pullDown.leadingAnchor constant:-4]
+                 : [label.trailingAnchor constraintEqualToAnchor:stack.trailingAnchor],
+        [label.centerYAnchor constraintEqualToAnchor:titleLine.centerYAnchor],
+        [label.heightAnchor constraintEqualToAnchor:titleLine.heightAnchor],
+        [label.widthAnchor constraintEqualToConstant:170],
+    ]];
 }
 
 - (void)addSetting:(UIStackView *)stack ofId:(NSString* )identifier withInfoTag:(BOOL)attched withDynamicLabel:(BOOL)added to:(MenuSectionView* )menuSection{
+    if (!stack) return; // e.g. storyboard rows that exist on iPad only
     stack.accessibilityIdentifier = identifier;
     [_settingStackDict setObject:stack forKey:identifier];
+    [MenuSectionView styleRow:stack indented:[_childStackIdentifiers containsObject:identifier]];
     if(attched) [self attachInfoTagForStack:stack];
     if(added) [self addDynamicLabelForStack:stack];
     [menuSection addSubStackView:stack];
+}
+
+// Rebuilds sections' separators / visibility, or the favorites card's, after
+// rows were shown or hidden.
+- (void)refreshSettingsLayout {
+    _settingsLayoutRefreshScheduled = NO;
+    if (currentSettingsMenuMode == AllSettings) {
+        for (UIView *view in _parentStack.arrangedSubviews) {
+            if ([view isKindOfClass:[MenuSectionView class]]) [(MenuSectionView *)view updateViewForFoldState];
+        }
+    } else {
+        [MenuSectionView refreshSeparatorsInStack:_parentStack];
+        [self hideOverlappedDynamicLabels];
+    }
+}
+
+- (void)scheduleSettingsLayoutRefresh {
+    if (_settingsLayoutRefreshScheduled) return;
+    _settingsLayoutRefreshScheduled = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_settingsLayoutRefreshScheduled) [self refreshSettingsLayout];
+    });
+}
+
+// Replaces a segmented control that doesn't fit with a pull-down on the
+// title line (label left, pull-down right). See VLSegmentPullDownButton.
+- (void)installPullDownForSegmentedControl:(UISegmentedControl *)segmented {
+    UIStackView *stack = (UIStackView *)segmented.superview;
+    if (!segmented || ![stack isKindOfClass:[UIStackView class]] || segmented.isHidden) return;
+    NSUInteger segmentedIndex = [stack.arrangedSubviews indexOfObject:segmented];
+    if (segmentedIndex == NSNotFound || segmentedIndex == 0) return;
+    UIView *labelView = stack.arrangedSubviews[segmentedIndex - 1];
+    if (![labelView isKindOfClass:[UILabel class]]) return;
+    UILabel *label = (UILabel *)labelView;
+
+    VLSegmentPullDownButton *button = [VLSegmentPullDownButton buttonWithConfiguration:VLPullDownButtonConfiguration(@"chevron.up.chevron.down") primaryAction:nil];
+    button.accessibilityIdentifier = VLPullDownButtonIdentifier;
+    [button setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [button setContentCompressionResistancePriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
+
+    [stack removeArrangedSubview:label];
+    [label removeFromSuperview];
+    label.numberOfLines = 1;
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.7;
+    [label setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [label setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, button]];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.alignment = UIStackViewAlignmentCenter;
+    row.distribution = UIStackViewDistributionFill;
+    row.spacing = 12;
+    [stack insertArrangedSubview:row atIndex:segmentedIndex - 1];
+    segmented.hidden = YES;
+    button.segmentedControl = segmented;
+    if (!_pullDownButtons) _pullDownButtons = [NSHashTable weakObjectsHashTable];
+    [_pullDownButtons addObject:button];
+}
+
+- (void)refreshPullDownButtons {
+    for (VLSegmentPullDownButton *button in _pullDownButtons) [button refreshFromSegmentedControl];
 }
 
 - (UILabel*)labelFromSwapStack {
@@ -580,6 +784,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     return nil;
 }
 
+// Single-line row: label left, control right.
 - (UIStackView*)swapButtonRowWithLabel:(UILabel*)label switch:(UISwitch*)switchControl {
     label.translatesAutoresizingMaskIntoConstraints = NO;
     switchControl.translatesAutoresizingMaskIntoConstraints = NO;
@@ -610,6 +815,17 @@ BOOL isCustomResolution(int resolutionSelected) {
     return row;
 }
 
+- (UILabel *)rowLabelWithText:(NSString *)text {
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.text = text;
+    label.font = [UIFont systemFontOfSize:17];
+    label.textColor = [ThemeManager sidebarTextPrimary];
+    label.textAlignment = NSTextAlignmentLeft;
+    return label;
+}
+
+// The physical-controller swaps: the storyboard row keeps A/B, X/Y gets its
+// own row so the two read as separate settings in the Controller group.
 - (void)configureSplitSwapButtonControls {
     if (!self.swapAbaxyStack || !self.swapAbSwitch || self.swapXySwitch) {
         return;
@@ -617,64 +833,39 @@ BOOL isCustomResolution(int resolutionSelected) {
 
     UILabel *swapAbLabel = [self labelFromSwapStack];
     if (!swapAbLabel) {
-        swapAbLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-        swapAbLabel.font = [UIFont systemFontOfSize:17];
+        swapAbLabel = [self rowLabelWithText:@""];
+        [self.swapAbaxyStack insertArrangedSubview:swapAbLabel atIndex:0];
     }
+    swapAbLabel.text = [LocalizationHelper localizedStringForKey:@"Controller: Swap A/B"];
+    // Same cleanup as swapButtonRowWithLabel: drop the storyboard's fixed switch width.
+    NSMutableArray<NSLayoutConstraint *> *switchWidths = [NSMutableArray array];
+    for (NSLayoutConstraint *constraint in self.swapAbSwitch.constraints) {
+        if (constraint.firstItem == self.swapAbSwitch && constraint.firstAttribute == NSLayoutAttributeWidth) [switchWidths addObject:constraint];
+    }
+    [NSLayoutConstraint deactivateConstraints:switchWidths];
+    swapAbLabel.adjustsFontSizeToFitWidth = YES;
+    swapAbLabel.minimumScaleFactor = 0.65;
+    swapAbLabel.numberOfLines = 1;
+    [swapAbLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [self.swapAbSwitch setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [self.swapAbSwitch setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
-    [self.swapAbaxyStack removeArrangedSubview:swapAbLabel];
-    [swapAbLabel removeFromSuperview];
-    [self.swapAbaxyStack removeArrangedSubview:self.swapAbSwitch];
-    [self.swapAbSwitch removeFromSuperview];
-
-    swapAbLabel.text = @"Swap A/B Buttons";
-    UIStackView *swapAbRow = [self swapButtonRowWithLabel:swapAbLabel switch:self.swapAbSwitch];
-
-    UILabel *swapXyLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-    swapXyLabel.font = swapAbLabel.font;
-    swapXyLabel.textColor = swapAbLabel.textColor;
-    swapXyLabel.highlightedTextColor = swapAbLabel.highlightedTextColor;
-    swapXyLabel.textAlignment = swapAbLabel.textAlignment;
-    swapXyLabel.text = @"Swap X/Y Buttons";
-
+    UILabel *swapXyLabel = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Controller: Swap X/Y"]];
+    swapXyLabel.font = swapAbLabel.font ?: swapXyLabel.font;
     self.swapXySwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
-    self.swapXySwitch.onTintColor = self.swapAbSwitch.onTintColor;
-    UIStackView *swapXyRow = [self swapButtonRowWithLabel:swapXyLabel switch:self.swapXySwitch];
-
-    self.swapAbaxyStack.axis = UILayoutConstraintAxisVertical;
-    self.swapAbaxyStack.alignment = UIStackViewAlignmentFill;
-    self.swapAbaxyStack.distribution = UIStackViewDistributionFill;
-    self.swapAbaxyStack.spacing = 8;
-    [self.swapAbaxyStack addArrangedSubview:swapAbRow];
-    [self.swapAbaxyStack addArrangedSubview:swapXyRow];
+    _swapXyStack = [self swapButtonRowWithLabel:swapXyLabel switch:self.swapXySwitch];
 }
 
 // "Block stream touch while OSC is on": lives in NSUserDefaults (not the
 // Settings entity) and applies live via reConfigStreamViewRealtime when the
-// sidebar closes. Sits right under the touch-mode controls.
+// sidebar closes. Its own row in the On-Screen Controls group.
 - (void)installStreamTouchBlockControl {
-    if (_streamTouchBlockSwitch || !self.enableOswSwitchStack) return;
-    UIStackView *parent = (UIStackView *)self.enableOswSwitchStack.superview;
-    if (![parent isKindOfClass:[UIStackView class]]) return;
-
-    UILabel *reference = nil;
-    for (UIView *view in self.enableOswSwitchStack.arrangedSubviews) {
-        if ([view isKindOfClass:[UILabel class]]) { reference = (UILabel *)view; break; }
-    }
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
-    label.font = reference ? reference.font : [UIFont systemFontOfSize:17];
-    label.textColor = reference ? reference.textColor : [UIColor labelColor];
-    label.textAlignment = reference ? reference.textAlignment : NSTextAlignmentLeft;
-    label.text = [LocalizationHelper localizedStringForKey:@"Block stream touch while OSC is on"];
-
+    if (_streamTouchBlockStack) return;
+    UILabel *label = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Block stream touch while OSC is on"]];
     _streamTouchBlockSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
-    _streamTouchBlockSwitch.onTintColor = self.enableOswForNativeTouchSwitch.onTintColor;
     [_streamTouchBlockSwitch setOn:[[NSUserDefaults standardUserDefaults] boolForKey:StreamViewBlockStreamTouchDefaultsKey]];
     [_streamTouchBlockSwitch addTarget:self action:@selector(streamTouchBlockSwitchFlipped:) forControlEvents:UIControlEventValueChanged];
-
-    UIStackView *row = [self swapButtonRowWithLabel:label switch:_streamTouchBlockSwitch];
-    NSUInteger index = [parent.arrangedSubviews indexOfObject:self.enableOswSwitchStack];
-    if (index == NSNotFound) [parent addArrangedSubview:row];
-    else [parent insertArrangedSubview:row atIndex:index + 1];
+    _streamTouchBlockStack = [self swapButtonRowWithLabel:label switch:_streamTouchBlockSwitch];
 }
 
 // "Audio follows Game/Desk": game mode plays only on the iPad, desk mode keeps
@@ -770,10 +961,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 - (UILabel *)gestureRowLabelWithText:(NSString *)text {
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
-    label.text = text;
-    label.font = [UIFont systemFontOfSize:18];
-    label.textColor = [UIColor whiteColor];
+    UILabel *label = [self rowLabelWithText:text];
     label.adjustsFontSizeToFitWidth = YES;
     label.minimumScaleFactor = 0.65;
     label.numberOfLines = 1;
@@ -783,39 +971,24 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 - (UIButton *)gestureRowButtonWithSymbol:(NSString *)symbolName {
-    UIButtonConfiguration *config = [UIButtonConfiguration plainButtonConfiguration];
-    config.image = [UIImage systemImageNamed:symbolName
-                           withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold]];
-    config.imagePlacement = NSDirectionalRectEdgeTrailing;
-    config.imagePadding = 6;
-    config.baseForegroundColor = [UIColor systemBlueColor];
-    config.contentInsets = NSDirectionalEdgeInsetsMake(8, 8, 8, 0);
-    config.titleLineBreakMode = NSLineBreakByTruncatingTail;
-    UIButton *button = [UIButton buttonWithConfiguration:config primaryAction:nil];
+    UIButton *button = [UIButton buttonWithConfiguration:VLPullDownButtonConfiguration(symbolName) primaryAction:nil];
     [button setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     [button setContentCompressionResistancePriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
     return button;
 }
 
 - (void)setTitle:(NSString *)title forGestureButton:(UIButton *)button {
-    UIButtonConfiguration *config = button.configuration;
-    config.attributedTitle = [[NSAttributedString alloc] initWithString:title ?: @""
-                                                             attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:17]}];
-    button.configuration = config;
+    VLSetPullDownTitle(button, title);
 }
 
-- (UIStackView *)gestureRowWithLabel:(UILabel *)label button:(UIButton *)button indented:(BOOL)indented {
+// Padding, height and indent come from MenuSectionView's row style (addSetting).
+- (UIStackView *)gestureRowWithLabel:(UILabel *)label button:(UIButton *)button {
     UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, button]];
     row.axis = UILayoutConstraintAxisHorizontal;
     row.alignment = UIStackViewAlignmentCenter;
     row.distribution = UIStackViewDistributionFill;
     row.spacing = 12;
-    row.layer.cornerRadius = 8;
-    if (indented) {
-        row.layoutMargins = UIEdgeInsetsMake(0, 16, 0, 0);
-        row.layoutMarginsRelativeArrangement = YES;
-    }
-    [row.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+    row.layer.cornerRadius = 8; // for the swap flash
     return row;
 }
 
@@ -830,12 +1003,12 @@ BOOL isCustomResolution(int resolutionSelected) {
         UIButton *button = [self gestureRowButtonWithSymbol:@"chevron.up.chevron.down"];
         button.showsMenuAsPrimaryAction = YES;
         _gestureTriggerButtons[action] = button;
-        _gestureRowStacks[action] = [self gestureRowWithLabel:label button:button indented:NO];
+        _gestureRowStacks[action] = [self gestureRowWithLabel:label button:button];
     }
     UILabel *commandLabel = [self gestureRowLabelWithText:[LocalizationHelper localizedStringForKey:@"Gesture Command Target"]];
     _gestureCommandTargetButton = [self gestureRowButtonWithSymbol:@"chevron.right"];
     [_gestureCommandTargetButton addTarget:self action:@selector(gestureCommandTargetTapped:) forControlEvents:UIControlEventTouchUpInside];
-    _gestureCommandTargetStack = [self gestureRowWithLabel:commandLabel button:_gestureCommandTargetButton indented:YES];
+    _gestureCommandTargetStack = [self gestureRowWithLabel:commandLabel button:_gestureCommandTargetButton];
 }
 
 - (UIMenu *)gestureTriggerMenuForAction:(StreamGestureAction)action {
@@ -895,7 +1068,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 - (void)flashGestureRowForAction:(StreamGestureAction)action {
     UIStackView *row = _gestureRowStacks[@(action)];
     if (!row) return;
-    row.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.15];
+    row.backgroundColor = [[ThemeManager sidebarAccent] colorWithAlphaComponent:0.15];
     [UIView animateWithDuration:0.6 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
         row.backgroundColor = [UIColor clearColor];
     } completion:nil];
@@ -1026,21 +1199,23 @@ BOOL isCustomResolution(int resolutionSelected) {
 
     UILabel *titleLabel = [[UILabel alloc] init];
     titleLabel.text = [LocalizationHelper localizedStringForKey:@"Controller Combo Mapping"];
-    titleLabel.font = [UIFont systemFontOfSize:18];
-    titleLabel.textColor = [UIColor whiteColor];
+    titleLabel.font = [UIFont systemFontOfSize:17];
+    titleLabel.textColor = [ThemeManager sidebarTextPrimary];
     titleLabel.numberOfLines = 1;
     titleLabel.adjustsFontSizeToFitWidth = YES;
     titleLabel.minimumScaleFactor = 0.72;
 
     _physicalControllerComboSummaryLabel = [[UILabel alloc] init];
-    _physicalControllerComboSummaryLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
-    _physicalControllerComboSummaryLabel.textColor = [ThemeManager appPrimaryColor];
+    _physicalControllerComboSummaryLabel.font = [UIFont systemFontOfSize:15];
+    _physicalControllerComboSummaryLabel.textColor = [ThemeManager sidebarTextSecondary];
+    _physicalControllerComboSummaryLabel.accessibilityIdentifier = @"valueLabel"; // keeps the theme pass off it
     _physicalControllerComboSummaryLabel.numberOfLines = 1;
     [_physicalControllerComboSummaryLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
 
     _physicalControllerComboConfigureButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [_physicalControllerComboConfigureButton setTitle:[LocalizationHelper localizedStringForKey:@"Configure"] forState:UIControlStateNormal];
-    _physicalControllerComboConfigureButton.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    _physicalControllerComboConfigureButton.titleLabel.font = [UIFont systemFontOfSize:17];
+    _physicalControllerComboConfigureButton.tintColor = [ThemeManager sidebarAccent];
     [_physicalControllerComboConfigureButton addTarget:self action:@selector(physicalControllerComboConfigureTapped:) forControlEvents:UIControlEventTouchUpInside];
     [_physicalControllerComboConfigureButton setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
 
@@ -1178,77 +1353,125 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-- (void)layoutSections{
-    videoSection = [[MenuSectionView alloc] init];
-    videoSection.delegate = self;
-    videoSection.sectionTitle = [LocalizationHelper localizedStringForKey:@"Video"];
-    if (@available(iOS 13.0, *)) {
-        [videoSection setSectionWithIcon:[UIImage systemImageNamed:@"waveform"] andSize:20];
+- (MenuSectionView *)newSectionWithTitle:(NSString *)title icon:(NSString *)iconName size:(CGFloat)size {
+    MenuSectionView *section = [[MenuSectionView alloc] init];
+    section.delegate = self;
+    section.sectionTitle = title;
+    // Bundled glyphs first (they predate the SF Symbols of the same name).
+    UIImage *icon = [UIImage imageNamed:iconName] ?: [UIImage systemImageNamed:iconName];
+    if (icon) [section setSectionWithIcon:icon andSize:size];
+    return section;
+}
+
+- (void)finishSection:(MenuSectionView *)section {
+    [section addToParentStack:_parentStack];
+    [section setExpanded:YES];
+}
+
+- (UIStackView *)pencilSliderStackForKey:(NSString *)key {
+    for (UIStackView *stack in self.pencilSliderStacks) {
+        if ([((UISlider *)stack.arrangedSubviews.lastObject).accessibilityIdentifier isEqualToString:key]) return stack;
     }
+    return nil;
+}
+
+- (void)addPencilSliderForKey:(NSString *)key to:(MenuSectionView *)section {
+    UIStackView *stack = [self pencilSliderStackForKey:key];
+    if (stack) [self addSetting:stack ofId:[NSString stringWithFormat:@"%@Stack", key] withInfoTag:NO withDynamicLabel:NO to:section];
+}
+
+// Eleven groups, each a card. Rows that only matter while the row above them
+// is on are listed in _childStackIdentifiers (indented, hidden with it).
+- (void)layoutSections{
+    _childStackIdentifiers = [NSSet setWithArray:@[
+        @"screenRatioStack", @"frameQueueSizeStack",
+        @"pointerVelocityDividerStack", @"pointerVelocityFactorStack", @"mousePointerVelocityStack",
+        @"palmRadiusThresholdStack",
+        @"gyroModeStack", @"gyroSensitivityStack", @"gyroInvertPitchStack", @"gyroInvertYawStack",
+        @"pencilHoldDelayStack", @"pencilHardPressThresholdStack",
+        @"gestureCommandTargetStack",
+    ]];
+
+    // 1. Video
+    videoSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Video"] icon:@"waveform" size:20];
     [self addSetting:self.resolutionStack ofId:@"resolutionStack" withInfoTag:NO withDynamicLabel:YES to:videoSection];
     [self addSetting:self.fpsStack ofId:@"fpsStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
     [self addSetting:self.bitrateStack ofId:@"bitrateStack" withInfoTag:YES withDynamicLabel:YES to:videoSection];
     [self addSetting:self.codecStack ofId:@"codecStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
     [self addSetting:self.hdrStack ofId:@"hdrStack" withInfoTag:![self hdrSupported] withDynamicLabel:NO to:videoSection];
     [self addSetting:self.yuv444Stack ofId:@"yuv444Stack" withInfoTag:YES withDynamicLabel:NO to:videoSection];
-    [self addSetting:self.pipStack ofId:@"pipStack" withInfoTag:YES withDynamicLabel:NO to:videoSection];
-    [self addSetting:self.pipStack ofId:@"pipStack" withInfoTag:YES withDynamicLabel:NO to:videoSection];
     [self addSetting:self.framePacingStack ofId:@"framePacingStack" withInfoTag:YES withDynamicLabel:NO to:videoSection];
     [self addSetting:self.frameQueueSizeStack ofId:@"frameQueueSizeStack" withInfoTag:NO withDynamicLabel:YES to:videoSection];
+    [self finishSection:videoSection];
 
-    // Snap screen to top and screen ratio (optional if storyboard not bound yet)
-    if (self.snapScreenToTopStack) {
-        [self addSetting:self.snapScreenToTopStack ofId:@"snapScreenToTopStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
-    }
-    if (self.screenRatioStack) {
-        [self addSetting:self.screenRatioStack ofId:@"screenRatioStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
-    }
-    [self addSetting:[self aspectMemoryResetStack] ofId:@"aspectMemoryResetStack" withInfoTag:NO withDynamicLabel:NO to:videoSection];
+    // 2. Display
+    MenuSectionView *displaySection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Settings Section: Display"] icon:@"rectangle.on.rectangle" size:19];
+    [self addSetting:self.snapScreenToTopStack ofId:@"snapScreenToTopStack" withInfoTag:NO withDynamicLabel:NO to:displaySection];
+    [self addSetting:self.screenRatioStack ofId:@"screenRatioStack" withInfoTag:NO withDynamicLabel:NO to:displaySection];
+    [self addSetting:self.pipStack ofId:@"pipStack" withInfoTag:YES withDynamicLabel:NO to:displaySection];
+    [self addSetting:self.externalDisplayModeStack ofId:@"externalDisplayModeStack" withInfoTag:YES withDynamicLabel:NO to:displaySection];
+    [self addSetting:[self aspectMemoryResetStack] ofId:@"aspectMemoryResetStack" withInfoTag:NO withDynamicLabel:NO to:displaySection];
+    [self finishSection:displaySection];
 
-    [videoSection addToParentStack:_parentStack];
-    [videoSection setExpanded:YES];
+    // 3. Audio
+    MenuSectionView *audioSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Audio"] icon:@"speaker.wave.2" size:20];
+    [self addSetting:[self audioFollowsModeStack] ofId:@"audioFollowsModeStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
+    [self addSetting:self.audioOnPcStack ofId:@"audioOnPcStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
+    [self addSetting:self.audioConfigStack ofId:@"audioConfigStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
+    [self finishSection:audioSection];
 
-    touchAndControlSection = [[MenuSectionView alloc] init];
-    touchAndControlSection.delegate = self;
-    touchAndControlSection.sectionTitle = [LocalizationHelper localizedStringForKey:@"Touch & Controller"];
-    if (@available(iOS 13.0, *)) {
-        [touchAndControlSection setSectionWithIcon:[UIImage imageNamed:@"arcade.stick.console"] andSize:20.5];
-    }
+    // 4. Touch (pointer sliders follow the touch mode; palm radius follows palm rejection)
+    touchAndControlSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Settings Section: Touch"] icon:@"hand.tap" size:19];
     [self addSetting:self.touchModeStack ofId:@"touchModeStack" withInfoTag:YES withDynamicLabel:NO to:touchAndControlSection];
     [self addSetting:self.pointerVelocityDividerStack ofId:@"pointerVelocityDividerStack" withInfoTag:YES withDynamicLabel:YES to:touchAndControlSection];
     [self addSetting:self.pointerVelocityFactorStack ofId:@"pointerVelocityFactorStack" withInfoTag:YES withDynamicLabel:YES to:touchAndControlSection];
     [self addSetting:self.mousePointerVelocityStack ofId:@"mousePointerVelocityStack" withInfoTag:NO withDynamicLabel:YES to:touchAndControlSection];
-    [self addSetting:self.onScreenWidgetStack ofId:@"onScreenWidgetStack" withInfoTag:YES withDynamicLabel:YES to:touchAndControlSection];
-    [self addSetting:self.swapAbaxyStack ofId:@"swapAbaxyStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
-    [self installPhysicalControllerComboControl];
-    [self addSetting:_physicalControllerComboStack ofId:@"physicalControllerComboStack" withInfoTag:YES withDynamicLabel:NO to:touchAndControlSection];
-    [self addSetting:self.emulatedControllerTypeStack ofId:@"emulatedControllerTypeStack" withInfoTag:YES withDynamicLabel:NO to:touchAndControlSection];
-    [self addSetting:self.gyroModeStack ofId:@"gyroModeStack" withInfoTag:YES withDynamicLabel:YES to:touchAndControlSection];
-    [self addSetting:self.gyroSensitivityStack ofId:@"gyroSensitivityStack" withInfoTag:NO withDynamicLabel:YES to:touchAndControlSection];
-    [self installMapGyroToControl];
-    [self addSetting:self.mapGyroToStack ofId:@"mapGyroToStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
-    [self installGyroInvertControls];
-    [self addSetting:self.gyroInvertPitchStack ofId:@"gyroInvertPitchStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
-    [self addSetting:self.gyroInvertYawStack ofId:@"gyroInvertYawStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPalmRejectionControl];
     [self addSetting:self.palmRejectionStack ofId:@"palmRejectionStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
-    [self installPencilHoldModeControl];
-    [self addSetting:self.pencilHoldModeStack ofId:@"pencilHoldModeStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
-    [self installPencilScrollFollowsTipControl];
-    [self addSetting:self.pencilScrollFollowsTipStack ofId:@"pencilScrollFollowsTipStack" withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
     [self installPencilSliderControls];
-    for (UIStackView *stack in self.pencilSliderStacks) {
-        [self addSetting:stack ofId:[NSString stringWithFormat:@"%@Stack", ((UISlider *)stack.arrangedSubviews.lastObject).accessibilityIdentifier] withInfoTag:NO withDynamicLabel:NO to:touchAndControlSection];
-    }
-    [touchAndControlSection addToParentStack:_parentStack];
-    [touchAndControlSection setExpanded:YES];
+    [self addPencilSliderForKey:@"palmRadiusThreshold" to:touchAndControlSection];
+    [self finishSection:touchAndControlSection];
 
-    MenuSectionView *gesturesSection = [[MenuSectionView alloc] init];
-    gesturesSection.delegate = self;
-    gesturesSection.sectionTitle = [LocalizationHelper localizedStringForKey:@"Gestures"];
-    if (@available(iOS 13.0, *)) {
-        [gesturesSection setSectionWithIcon:[UIImage systemImageNamed:@"hand.draw"] andSize:23];
-    }
+    // 5. On-Screen Controls
+    MenuSectionView *oscSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Settings Section: On-Screen Controls"] icon:@"circle.grid.2x2" size:19];
+    [self addSetting:self.onScreenWidgetStack ofId:@"onScreenWidgetStack" withInfoTag:YES withDynamicLabel:YES to:oscSection];
+    [self installStreamTouchBlockControl];
+    [self addSetting:_streamTouchBlockStack ofId:@"streamTouchBlockStack" withInfoTag:NO withDynamicLabel:NO to:oscSection];
+    [self finishSection:oscSection];
+
+    // 6. Controller (gyro rows hang off "Map Gyro To")
+    controllerSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Settings Section: Controller"] icon:@"gamecontroller" size:18];
+    [self addSetting:self.emulatedControllerTypeStack ofId:@"emulatedControllerTypeStack" withInfoTag:YES withDynamicLabel:NO to:controllerSection];
+    [self addSetting:self.multiControllerStack ofId:@"multiControllerStack" withInfoTag:NO withDynamicLabel:NO to:controllerSection];
+    [self installPhysicalControllerComboControl];
+    [self addSetting:_physicalControllerComboStack ofId:@"physicalControllerComboStack" withInfoTag:YES withDynamicLabel:NO to:controllerSection];
+    [self addSetting:self.swapAbaxyStack ofId:@"swapAbaxyStack" withInfoTag:NO withDynamicLabel:NO to:controllerSection];
+    [self addSetting:_swapXyStack ofId:@"swapXyStack" withInfoTag:NO withDynamicLabel:NO to:controllerSection];
+    [self installMapGyroToControl];
+    [self addSetting:self.mapGyroToStack ofId:@"mapGyroToStack" withInfoTag:NO withDynamicLabel:NO to:controllerSection];
+    [self addSetting:self.gyroModeStack ofId:@"gyroModeStack" withInfoTag:YES withDynamicLabel:NO to:controllerSection];
+    [self addSetting:self.gyroSensitivityStack ofId:@"gyroSensitivityStack" withInfoTag:NO withDynamicLabel:YES to:controllerSection];
+    [self installGyroInvertControls];
+    [self addSetting:self.gyroInvertPitchStack ofId:@"gyroInvertPitchStack" withInfoTag:NO withDynamicLabel:NO to:controllerSection];
+    [self addSetting:self.gyroInvertYawStack ofId:@"gyroInvertYawStack" withInfoTag:NO withDynamicLabel:NO to:controllerSection];
+    [self finishSection:controllerSection];
+
+    // 7. Apple Pencil
+    MenuSectionView *pencilSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Settings Section: Apple Pencil"] icon:@"pencil.tip" size:19];
+    [self installPencilHoldModeControl];
+    [self addSetting:self.pencilHoldModeStack ofId:@"pencilHoldModeStack" withInfoTag:NO withDynamicLabel:NO to:pencilSection];
+    [self addPencilSliderForKey:@"pencilHoldDelay" to:pencilSection];
+    [self addPencilSliderForKey:@"pencilHardPressThreshold" to:pencilSection];
+    [self installPencilScrollFollowsTipControl];
+    [self addSetting:self.pencilScrollFollowsTipStack ofId:@"pencilScrollFollowsTipStack" withInfoTag:NO withDynamicLabel:NO to:pencilSection];
+    [self addPencilSliderForKey:@"pencilScrollPointsPerNotch" to:pencilSection];
+    [self addPencilSliderForKey:@"pencilScrollZoneRadius" to:pencilSection];
+    [self addPencilSliderForKey:@"pencilScrollMaxRate" to:pencilSection];
+    [self finishSection:pencilSection];
+    [self updatePencilStackVisibility];
+
+    // 8. Gestures
+    MenuSectionView *gesturesSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Gestures"] icon:@"hand.draw" size:21];
     _gesturesSection = gesturesSection;
     [self installStreamGestureRows];
     for (NSNumber *action in [StreamGestureBindings allActions]) {
@@ -1259,76 +1482,35 @@ BOOL isCustomResolution(int resolutionSelected) {
     }
     self.slideToSettingsDistanceUILabel.text = [LocalizationHelper localizedStringForKey:@"Edge Swipe Distance"];
     [self addSetting:self.slideToSettingsDistanceStack ofId:@"slideToSettingsDistanceStack" withInfoTag:YES withDynamicLabel:YES to:gesturesSection];
+    [self finishSection:gesturesSection];
     [self refreshStreamGestureRows];
-    [gesturesSection addToParentStack:_parentStack];
-    [gesturesSection setExpanded:YES];
 
-    MenuSectionView *peripheralSection = [[MenuSectionView alloc] init];
-    peripheralSection.delegate = self;
-    peripheralSection.sectionTitle = [LocalizationHelper localizedStringForKey:@"Peripherals"];
-    if (@available(iOS 13.0, *)) {
-        [peripheralSection setSectionWithIcon:[UIImage imageNamed:@"cable.connector.video"] andSize:20];
-    }
-    if (@available(iOS 13.0, *)) {
-        [self addSetting:self.externalDisplayModeStack ofId:@"externalDisplayModeStack" withInfoTag:YES withDynamicLabel:NO to:peripheralSection];
-    }
-    [self addSetting:self.localMousePointerModeStack ofId:@"localMousePointerModeStack" withInfoTag:YES withDynamicLabel:NO to:peripheralSection];
-    [self addSetting:self.reverseMouseWheelDirectionStack ofId:@"reverseMouseWheelDirectionStack" withInfoTag:NO withDynamicLabel:NO to:peripheralSection];
-    [self addSetting:self.citrixX1MouseStack ofId:@"citrixX1MouseStack" withInfoTag:NO withDynamicLabel:NO to:peripheralSection];
-    [peripheralSection addToParentStack:_parentStack];
-    [peripheralSection setExpanded:YES];
+    // 9. Mouse & Keyboard
+    MenuSectionView *mouseKeyboardSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Settings Section: Mouse & Keyboard"] icon:@"keyboard" size:18];
+    [self addSetting:self.localMousePointerModeStack ofId:@"localMousePointerModeStack" withInfoTag:YES withDynamicLabel:NO to:mouseKeyboardSection];
+    [self addSetting:self.reverseMouseWheelDirectionStack ofId:@"reverseMouseWheelDirectionStack" withInfoTag:NO withDynamicLabel:NO to:mouseKeyboardSection];
+    [self addSetting:self.citrixX1MouseStack ofId:@"citrixX1MouseStack" withInfoTag:NO withDynamicLabel:NO to:mouseKeyboardSection];
+    [self addSetting:self.softKeyboardToolbarStack ofId:@"softKeyboardToolbarStack" withInfoTag:NO withDynamicLabel:NO to:mouseKeyboardSection];
+    [self finishSection:mouseKeyboardSection];
 
-    
-    
-    MenuSectionView *audioSection = [[MenuSectionView alloc] init];
-    audioSection.delegate = self;
-    audioSection.sectionTitle = [LocalizationHelper localizedStringForKey:@"Audio"];
-    if (@available(iOS 13.0, *)) {
-        [audioSection setSectionWithIcon:[UIImage imageNamed:@"speaker.wave.2"] andSize:20];
-    }
-    
-    [self addSetting:[self audioFollowsModeStack] ofId:@"audioFollowsModeStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
-    [self addSetting:self.audioOnPcStack ofId:@"audioOnPcStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
-    [self addSetting:self.audioConfigStack ofId:@"audioConfigStack" withInfoTag:NO withDynamicLabel:NO to:audioSection];
-    [audioSection addToParentStack:_parentStack];
-    [audioSection setExpanded:YES];
-
-    
-    otherSection = [[MenuSectionView alloc] init];
-    otherSection.delegate = self;
-    otherSection.sectionTitle = [LocalizationHelper localizedStringForKey:@"Others"];
-    if (@available(iOS 13.0, *)) {
-        [otherSection setSectionWithIcon:[UIImage systemImageNamed:@"cube"] andSize:20.5];
-    }
+    // 10. General
+    otherSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Settings Section: General"] icon:@"gearshape" size:19];
     [self addSetting:self.statsOverlayStack ofId:@"statsOverlayStack" withInfoTag:NO withDynamicLabel:NO to:otherSection];
-    [self addSetting:self.unlockDisplayOrientationStack ofId:@"unlockDisplayOrientationStack" withInfoTag:YES withDynamicLabel:NO to:otherSection];
-    [self addSetting:self.backgroundSessionTimerStack ofId:@"backgroundSessionTimerStack" withInfoTag:NO withDynamicLabel:YES to:otherSection];
-    [self addSetting:self.optimizeGamesStack ofId:@"optimizeGamesStack" withInfoTag:YES withDynamicLabel:NO to:otherSection];
-    [self addSetting:self.multiControllerStack ofId:@"multiControllerStack" withInfoTag:NO withDynamicLabel:NO to:otherSection];
-    [self addSetting:self.softKeyboardToolbarStack ofId:@"softKeyboardToolbarStack" withInfoTag:NO withDynamicLabel:NO to:otherSection];
-
     [self addSetting:self.performanceGraphStack ofId:@"performanceGraphStack" withInfoTag:YES withDynamicLabel:NO to:otherSection];
     [self addDynamicLabelForStack:self.graphOpacityStack];
+    [self addSetting:self.backgroundSessionTimerStack ofId:@"backgroundSessionTimerStack" withInfoTag:NO withDynamicLabel:YES to:otherSection];
+    [self addSetting:self.unlockDisplayOrientationStack ofId:@"unlockDisplayOrientationStack" withInfoTag:YES withDynamicLabel:NO to:otherSection];
+    [self addSetting:self.optimizeGamesStack ofId:@"optimizeGamesStack" withInfoTag:YES withDynamicLabel:NO to:otherSection];
+    [self finishSection:otherSection];
 
-    [otherSection addToParentStack:_parentStack];
-    [otherSection setExpanded:YES];
-    
-    
-   experimentalSection = [[MenuSectionView alloc] init];
-    experimentalSection.delegate = self;
-    experimentalSection.sectionTitle = [LocalizationHelper localizedStringForKey:@"Experimental"];
-    if (@available(iOS 13.0, *)) {
-        [experimentalSection setSectionWithIcon:[UIImage imageNamed:@"flask"] andSize:20];
-    }
+    // 11. Experimental
+    experimentalSection = [self newSectionWithTitle:[LocalizationHelper localizedStringForKey:@"Experimental"] icon:@"flask" size:20];
     [self addSetting:self.touchMoveEventIntervalStack ofId:@"touchMoveEventIntervalStack" withInfoTag:NO withDynamicLabel:YES to:experimentalSection];
-    
     [self addSetting:self.renderingBackendStack ofId:@"renderingBackendStack" withInfoTag:YES withDynamicLabel:NO to:experimentalSection];
 
     // Anti-stutter keep-alive: send a no-op input event every frame so Wi-Fi
     // power save can't idle the uplink between real inputs (upstream 689221f1).
-    UILabel *dummyEventLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-    dummyEventLabel.text = [LocalizationHelper localizedStringForKey:@"Anti-Stutter Keep-Alive"];
-    dummyEventLabel.font = [UIFont systemFontOfSize:14];
+    UILabel *dummyEventLabel = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Anti-Stutter Keep-Alive"]];
     self.sendDummyEventSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
     // layoutSections re-runs when switching Favorite/All settings modes and a
     // fresh UISwitch defaults to OFF — saveSettings then persists whatever the
@@ -1336,15 +1518,11 @@ BOOL isCustomResolution(int resolutionSelected) {
     // must reload their persisted state on (re)creation (storyboard-backed
     // ones keep state across layoutSections; see installGyroInvertControls).
     self.sendDummyEventSwitch.on = [[[DataManager alloc] init] getSettings].sendDummyEvent;
-    UIStackView *dummyEventRow = [self swapButtonRowWithLabel:dummyEventLabel switch:self.sendDummyEventSwitch];
-    UIStackView *sendDummyEventStack = [[UIStackView alloc] initWithArrangedSubviews:@[dummyEventRow]];
-    sendDummyEventStack.axis = UILayoutConstraintAxisVertical;
-    sendDummyEventStack.alignment = UIStackViewAlignmentFill;
-    sendDummyEventStack.distribution = UIStackViewDistributionFill;
+    UIStackView *sendDummyEventStack = [self swapButtonRowWithLabel:dummyEventLabel switch:self.sendDummyEventSwitch];
     [self addSetting:sendDummyEventStack ofId:@"sendDummyEventStack" withInfoTag:NO withDynamicLabel:NO to:experimentalSection];
+    [self finishSection:experimentalSection];
 
-    [experimentalSection addToParentStack:_parentStack];
-    [experimentalSection setExpanded:YES];
+    [self updateGyroStackVisibility];
 }
 
 
@@ -1462,14 +1640,14 @@ BOOL isCustomResolution(int resolutionSelected) {
     view.layer.cornerRadius = 6;
     view.layer.masksToBounds = YES;
     view.clipsToBounds = YES;
-    view.backgroundColor = [UIColor colorWithRed:0.5 green:0.5 blue:1 alpha:0.35];
+    view.backgroundColor = [[ThemeManager sidebarAccent] colorWithAlphaComponent:0.25];
 }
 
 - (void)highlightedBackgroundForView:(UIView* )view{
     view.layer.cornerRadius = 6;
     view.layer.masksToBounds = YES;
     view.clipsToBounds = YES;
-    view.backgroundColor = [ThemeManager appPrimaryColorWithAlpha];
+    view.backgroundColor = [[ThemeManager sidebarAccent] colorWithAlphaComponent:0.15];
 }
 
 
@@ -1645,7 +1823,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     }
     button.accessibilityIdentifier = @"removeButton";
     button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.tintColor = [UIColor redColor];
+    button.tintColor = [UIColor systemRedColor];
     
     [button addTarget:self action:@selector(removeSettingStackFromFavorites:) forControlEvents:UIControlEventTouchUpInside];
     
@@ -1656,29 +1834,45 @@ BOOL isCustomResolution(int resolutionSelected) {
     ]];
 }
 
+// ⓘ sits right after the row title's text (see updateInfoButtonPositions).
 - (void)attachInfoTagForStack:(UIStackView* )stack{
     UIButton* button = [self findInfoButtonFromStack:stack];
     if(button) return;
     button = [UIButton buttonWithType:UIButtonTypeSystem];
-    if (@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:13.5 weight:UIImageSymbolWeightBold];
-        [button setImage:[UIImage systemImageNamed:@"info.circle" withConfiguration:config] forState:UIControlStateNormal];
-    } else {
-        [button setTitle:@"info" forState:UIControlStateNormal];
-        button.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
-        button.titleLabel.accessibilityIdentifier = @"infoButton";
-    }
+    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightRegular];
+    [button setImage:[UIImage systemImageNamed:@"info.circle" withConfiguration:config] forState:UIControlStateNormal];
     button.accessibilityIdentifier = @"infoButton";
     button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.tintColor = [ThemeManager appPrimaryColor];
-    
+    button.tintColor = [ThemeManager sidebarAccent];
     [button addTarget:self action:@selector(infoButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
-    
     [stack addSubview:button];
-    [NSLayoutConstraint activateConstraints:@[
-        [button.trailingAnchor constraintEqualToAnchor:stack.trailingAnchor constant:-4],
-        [button.centerYAnchor constraintEqualToAnchor:stack.arrangedSubviews[0].centerYAnchor constant:0],
-    ]];
+
+    UILabel *title = [self titleLabelForStack:stack];
+    UIView *anchor = title ?: stack.arrangedSubviews.firstObject;
+    if (!anchor) return;
+    if (title) {
+        NSLayoutConstraint *leading = [button.leadingAnchor constraintEqualToAnchor:title.leadingAnchor constant:[self textWidthOfLabel:title] + 6];
+        [NSLayoutConstraint activateConstraints:@[leading, [button.centerYAnchor constraintEqualToAnchor:title.centerYAnchor]]];
+        if (!_infoButtonLeadingConstraints) _infoButtonLeadingConstraints = [NSMapTable weakToStrongObjectsMapTable];
+        [_infoButtonLeadingConstraints setObject:leading forKey:button];
+    } else {
+        [NSLayoutConstraint activateConstraints:@[
+            [button.trailingAnchor constraintEqualToAnchor:stack.trailingAnchor constant:-4],
+            [button.centerYAnchor constraintEqualToAnchor:anchor.centerYAnchor],
+        ]];
+    }
+}
+
+- (void)updateInfoButtonPositions {
+    for (UIButton *button in _infoButtonLeadingConstraints) {
+        UIStackView *stack = (UIStackView *)button.superview;
+        if (![stack isKindOfClass:[UIStackView class]]) continue;
+        UILabel *title = [self titleLabelForStack:stack];
+        if (!title) continue;
+        CGFloat constant = [self textWidthOfLabel:title] + 6;
+        NSLayoutConstraint *leading = [_infoButtonLeadingConstraints objectForKey:button];
+        if (fabs(leading.constant - constant) > 0.5) leading.constant = constant;
+    }
 }
 
 -  (void)infoButtonTapped:(UIButton* )sender{
@@ -1828,9 +2022,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     //switchToAll/Favorite 调用此方法时，这些hiddenStack已身处新的superView中， 可以正常执行hidden = YES
     for(UIStackView* stack in hiddenStacks) stack.hidden = YES;
 
-    if(currentSettingsMenuMode == AllSettings){
-        for(MenuSectionView* section in _parentStack.arrangedSubviews) [section updateViewForFoldState];
-    }
+    [self refreshSettingsLayout];
     [self hideDynamicLabelsWhenOverlapped:self.parentStack];
 }
 
@@ -1864,13 +2056,13 @@ BOOL isCustomResolution(int resolutionSelected) {
     currentSettings.settingsMenuMode = [NSNumber numberWithInteger:currentSettingsMenuMode];
     [dataMan saveData];
     
-    _parentStack.spacing = [self isIPhone] ? 10 : 15;
-    
     [self loadFavoriteSettingStackIdentifiers];
     for(NSString* settingIdentifier in _favoriteSettingStackIdentifiers){
         // A favorite saved by an older build may name a setting that no longer exists.
-        UIView *settingStack = _settingStackDict[settingIdentifier];
-        if (settingStack) [_parentStack addArrangedSubview:settingStack];
+        UIStackView *settingStack = _settingStackDict[settingIdentifier];
+        if (!settingStack) continue;
+        [MenuSectionView styleRow:settingStack indented:NO]; // no parent row next to it here
+        [_parentStack addArrangedSubview:settingStack];
     }
     [self hideDynamicLabelsWhenOverlapped:self.parentStack];
     [self layoutSettingsView];
@@ -1946,6 +2138,19 @@ BOOL isCustomResolution(int resolutionSelected) {
     NSArray *savedArray = [[NSUserDefaults standardUserDefaults] objectForKey:@"FavoriteSettingStackIdentifiers"];
         
     if ([savedArray isKindOfClass:[NSArray class]]) {
+        // Swap X/Y used to share the A/B row; once, give it its own favorite
+        // right after A/B so the split doesn't drop it from the list.
+        NSString *swapSplitMigrationKey = @"FavoriteSettingsSwapXySplitV1";
+        if (![[NSUserDefaults standardUserDefaults] boolForKey:swapSplitMigrationKey]) {
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:swapSplitMigrationKey];
+            NSUInteger swapIndex = [savedArray indexOfObject:@"swapAbaxyStack"];
+            if (swapIndex != NSNotFound && ![savedArray containsObject:@"swapXyStack"]) {
+                NSMutableArray *migrated = [savedArray mutableCopy];
+                [migrated insertObject:@"swapXyStack" atIndex:swapIndex + 1];
+                savedArray = migrated;
+                [[NSUserDefaults standardUserDefaults] setObject:savedArray forKey:@"FavoriteSettingStackIdentifiers"];
+            }
+        }
         // The old gesture rows were replaced by the gesture table; carry their
         // favorites over to the matching new rows.
         NSDictionary<NSString *, NSString *> *renamed = @{
@@ -2009,6 +2214,16 @@ BOOL isCustomResolution(int resolutionSelected) {
     }
     [self initParentStack];
     [self configureSplitSwapButtonControls];
+    // Storyboard segmented controls with more options than fit on one line
+    // become pull-downs (before layoutSections so value labels anchor to them).
+    [self installPullDownForSegmentedControl:self.resolutionSelector];
+    [self installPullDownForSegmentedControl:self.codecSelector];
+    [self installPullDownForSegmentedControl:self.onScreenWidgetSelector];
+    [self installPullDownForSegmentedControl:self.gyroModeSelector];
+    UIStackView *enableOswRow = self.enableOswSwitchStack;
+    enableOswRow.alignment = UIStackViewAlignmentCenter;
+    enableOswRow.layoutMargins = UIEdgeInsetsMake(4, MenuSectionRowInset, 0, 0); // depends on the touch mode above it
+    enableOswRow.layoutMarginsRelativeArrangement = YES;
     [self layoutSections];
 
 
@@ -2025,10 +2240,8 @@ BOOL isCustomResolution(int resolutionSelected) {
 
     justEnteredSettingsView = true;
 
-    // Always run settings in dark mode because we want the light fonts
-    if (@available(iOS 13.0, tvOS 13.0, *)) {
-        self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-    }
+    // The sidebar follows the system appearance: its colors are the dynamic
+    // ThemeManager sidebar tokens (dark and light), see updateTheme.
 
     DataManager* dataMan = [[DataManager alloc] init];
     TemporarySettings* currentSettings = [dataMan getSettings];
@@ -2246,7 +2459,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         [self.screenRatioStack setHidden:!snapEnabled];
     }
     if (videoSection) {
-        [videoSection updateViewForFoldState];
+        [self refreshSettingsLayout];
     }
 
     // lift streamview setting
@@ -2309,11 +2522,12 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.enableOswForNativeTouchSwitch setOn:currentSettings.touchMode.intValue != NativeTouchOnly];
     [self.enableOswForNativeTouchSwitch addTarget:self action:@selector(enableOswForNativeTouchSwitchFlipped:) forControlEvents:UIControlEventValueChanged];
     [self enableOswForNativeTouchSwitchFlipped:self.enableOswForNativeTouchSwitch];
-    [self installStreamTouchBlockControl];
 
     [self.externalDisplayModeSelector setSelectedSegmentIndex:currentSettings.externalDisplayMode.integerValue];
     [self.localMousePointerModeSelector setSelectedSegmentIndex:currentSettings.localMousePointerMode.integerValue];
-    
+
+    // Segments were removed above (360p, Custom, unsupported codecs / 120 FPS).
+    [self refreshPullDownButtons];
     justEnteredSettingsView = false;
 }
 
@@ -2401,7 +2615,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 - (void)framePacingModeChanged:(UISegmentedControl *)sender {
     // Hide frame queue size for Off and Legacy modes
     [self setHidden:(sender.selectedSegmentIndex == FramePacingModeOff || sender.selectedSegmentIndex == FramePacingModeLegacy) forStack:self.frameQueueSizeStack];
-    [videoSection updateViewForFoldState];
+    [self refreshSettingsLayout];
 
     if(sender.selectedSegmentIndex == FramePacingModeOff || sender.selectedSegmentIndex == FramePacingModeLegacy){
         [self.enableGraphsSwitch setOn:NO];
@@ -2410,7 +2624,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.enableGraphsSwitch setEnabled:sender.selectedSegmentIndex == FramePacingModeQueue];
     [self.graphOpacityStepper setEnabled:self.enableGraphsSwitch.isOn];
     [self setHidden:(sender.selectedSegmentIndex == FramePacingModeOff || sender.selectedSegmentIndex == FramePacingModeLegacy) forStack:self.performanceGraphStack];
-    [otherSection updateViewForFoldState];
+    [self refreshSettingsLayout];
 
     /*
     if (sender.selectedSegmentIndex == FramePacingModeLegacy) {
@@ -2494,13 +2708,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 // the snapScreenToTop / snapScreenRatioMode pattern in TemporarySettings.m).
 // Order matches the MapGyroTo enum: Motion=0, RightStick=1, Mouse=2, Off=3.
 - (void) installMapGyroToControl {
-    UIFont* labelFont = [UIFont systemFontOfSize:18];
-    UIColor* whiteColor = [UIColor whiteColor];
-
-    self.mapGyroToLabel = [[UILabel alloc] init];
-    self.mapGyroToLabel.text = [LocalizationHelper localizedStringForKey:@"Map Gyro To"];
-    self.mapGyroToLabel.font = labelFont;
-    self.mapGyroToLabel.textColor = whiteColor;
+    self.mapGyroToLabel = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Map Gyro To"]];
 
     self.mapGyroToSelector = [[UISegmentedControl alloc] initWithItems:@[
         [LocalizationHelper localizedStringForKey:@"DS4"],
@@ -2511,26 +2719,21 @@ BOOL isCustomResolution(int resolutionSelected) {
     NSInteger savedIndex = [[NSUserDefaults standardUserDefaults] integerForKey:@"mapGyroTo"];
     if (savedIndex < 0 || savedIndex > 3) savedIndex = 0;
     self.mapGyroToSelector.selectedSegmentIndex = savedIndex;
-    NSDictionary* whiteFontAttributes = @{ NSForegroundColorAttributeName: whiteColor };
-    [self.mapGyroToSelector setTitleTextAttributes:whiteFontAttributes forState:UIControlStateNormal];
     [self.mapGyroToSelector addTarget:self action:@selector(mapGyroToChanged:) forControlEvents:UIControlEventValueChanged];
 
-    // Vertical stack: label on top (full width), segment full width below.
-    // 4 segments + Chinese / multi-language labels won't fit horizontally on
-    // narrow Settings panels — splitting onto two rows is the cleanest fix.
+    // Four options don't fit a segmented control on narrow panels: the row
+    // shows a pull-down; the hidden segmented control stays the model.
     self.mapGyroToStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.mapGyroToLabel, self.mapGyroToSelector]];
     self.mapGyroToStack.axis = UILayoutConstraintAxisVertical;
     self.mapGyroToStack.spacing = 4;
     self.mapGyroToStack.alignment = UIStackViewAlignmentFill;
     self.mapGyroToStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self installPullDownForSegmentedControl:self.mapGyroToSelector];
 }
 
 // Palm rejection on the stream surface. NSUserDefaults @"palmRejection", default YES.
 - (void) installPalmRejectionControl {
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
-    label.text = [LocalizationHelper localizedStringForKey:@"Palm Rejection"];
-    label.font = [UIFont systemFontOfSize:18];
-    label.textColor = [UIColor whiteColor];
+    UILabel *label = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Palm Rejection"]];
     self.palmRejectionSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
     id saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"palmRejection"];
     self.palmRejectionSwitch.on = saved ? [saved boolValue] : YES;
@@ -2544,15 +2747,26 @@ BOOL isCustomResolution(int resolutionSelected) {
 
 - (void) palmRejectionChanged:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:@"palmRejection"];
+    [self updatePencilStackVisibility];
+}
+
+// Dependent Pencil / palm rows: the palm radius only matters with palm
+// rejection on; the hold delay with any hold mode; the hard-press threshold
+// only in the modes where a hard press is the right button.
+- (void)updatePencilStackVisibility {
+    UIStackView *palmRadius = [self pencilSliderStackForKey:@"palmRadiusThreshold"];
+    UIStackView *holdDelay = [self pencilSliderStackForKey:@"pencilHoldDelay"];
+    UIStackView *hardPress = [self pencilSliderStackForKey:@"pencilHardPressThreshold"];
+    NSInteger holdMode = self.pencilHoldModeSelector.selectedSegmentIndex;
+    if (palmRadius) [self setHidden:!self.palmRejectionSwitch.isOn forStack:palmRadius];
+    if (holdDelay) [self setHidden:holdMode == PencilHoldModeOff forStack:holdDelay];
+    if (hardPress) [self setHidden:!(holdMode == PencilHoldModeLongPressHardPress || holdMode == PencilHoldModeHardPressOnly) forStack:hardPress];
 }
 
 // Squeeze scroll direction: content follows the tip (touch-like) or the tip
 // drags the scrollbar. NSUserDefaults @"pencilScrollFollowsTip", default YES.
 - (void) installPencilScrollFollowsTipControl {
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
-    label.text = [LocalizationHelper localizedStringForKey:@"Pencil Scroll Follows Tip"];
-    label.font = [UIFont systemFontOfSize:18];
-    label.textColor = [UIColor whiteColor];
+    UILabel *label = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Pencil Scroll Follows Tip"]];
     self.pencilScrollFollowsTipSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
     id saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"pencilScrollFollowsTip"];
     self.pencilScrollFollowsTipSwitch.on = saved ? [saved boolValue] : YES;
@@ -2585,9 +2799,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     NSMutableArray<UIStackView *> *stacks = [NSMutableArray array];
     for (NSArray *row in rows) {
         NSString *key = row[0];
-        UILabel *label = [[UILabel alloc] init];
-        label.font = [UIFont systemFontOfSize:18];
-        label.textColor = [UIColor whiteColor];
+        NSString *title = [LocalizationHelper localizedStringForKey:row[1]];
+        UILabel *label = [self rowLabelWithText:title];
         UISlider *slider = [[UISlider alloc] init];
         slider.minimumValue = [row[3] floatValue];
         slider.maximumValue = [row[4] floatValue];
@@ -2596,24 +2809,32 @@ BOOL isCustomResolution(int resolutionSelected) {
         slider.accessibilityIdentifier = key;
         [slider addTarget:self action:@selector(pencilSliderChanged:) forControlEvents:UIControlEventValueChanged];
         self.pencilSliderLabels[key] = label;
-        self.pencilSliderTitles[key] = [LocalizationHelper localizedStringForKey:row[1]];
+        self.pencilSliderTitles[key] = title;
         self.pencilSliderUnits[key] = row[2];
-        [self refreshPencilSliderLabel:slider];
 
+        // Two-line row: title with the value on the right, slider below.
         UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[label, slider]];
         stack.axis = UILayoutConstraintAxisVertical;
         stack.spacing = 4;
         stack.alignment = UIStackViewAlignmentFill;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
+        [self addDynamicLabelForStack:stack];
         [stacks addObject:stack];
+        [self refreshPencilSliderLabel:slider];
     }
     self.pencilSliderStacks = stacks;
 }
 
 - (void) refreshPencilSliderLabel:(UISlider *)slider {
     NSString *key = slider.accessibilityIdentifier;
-    self.pencilSliderLabels[key].text = [NSString stringWithFormat:@"%@: %d%@", self.pencilSliderTitles[key],
-                                         (int)lroundf(slider.value), self.pencilSliderUnits[key]];
+    UIStackView *stack = (UIStackView *)slider.superview;
+    UILabel *valueLabel = [stack isKindOfClass:[UIStackView class]] ? [self findDynamicLabelFromStack:stack] : nil;
+    NSString *value = [NSString stringWithFormat:@"%d%@", (int)lroundf(slider.value), self.pencilSliderUnits[key]];
+    if (valueLabel) {
+        valueLabel.text = value;
+    } else {
+        self.pencilSliderLabels[key].text = [NSString stringWithFormat:@"%@: %@", self.pencilSliderTitles[key], value];
+    }
 }
 
 - (void) pencilSliderChanged:(UISlider *)sender {
@@ -2625,10 +2846,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 // Stationary pencil contact. NSUserDefaults @"pencilHoldMode", persisted
 // immediately. Order matches PencilHoldMode: Off=0, LongPress=1, LongPress+HardPress=2, HardPressOnly=3.
 - (void) installPencilHoldModeControl {
-    UILabel *label = [[UILabel alloc] init];
-    label.text = [LocalizationHelper localizedStringForKey:@"Pencil Hold"];
-    label.font = [UIFont systemFontOfSize:18];
-    label.textColor = [UIColor whiteColor];
+    UILabel *label = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Pencil Hold"]];
 
     self.pencilHoldModeSelector = [[UISegmentedControl alloc] initWithItems:@[
         [LocalizationHelper localizedStringForKey:@"Off"],
@@ -2640,7 +2858,6 @@ BOOL isCustomResolution(int resolutionSelected) {
     NSInteger savedIndex = saved ? [saved integerValue] : PencilHoldModeLongPressHardPress;
     if (savedIndex < 0 || savedIndex > 3) savedIndex = PencilHoldModeLongPressHardPress;
     self.pencilHoldModeSelector.selectedSegmentIndex = savedIndex;
-    [self.pencilHoldModeSelector setTitleTextAttributes:@{ NSForegroundColorAttributeName: [UIColor whiteColor] } forState:UIControlStateNormal];
     [self.pencilHoldModeSelector addTarget:self action:@selector(pencilHoldModeChanged:) forControlEvents:UIControlEventValueChanged];
 
     self.pencilHoldModeStack = [[UIStackView alloc] initWithArrangedSubviews:@[label, self.pencilHoldModeSelector]];
@@ -2648,10 +2865,12 @@ BOOL isCustomResolution(int resolutionSelected) {
     self.pencilHoldModeStack.spacing = 4;
     self.pencilHoldModeStack.alignment = UIStackViewAlignmentFill;
     self.pencilHoldModeStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self installPullDownForSegmentedControl:self.pencilHoldModeSelector];
 }
 
 - (void) pencilHoldModeChanged:(UISegmentedControl* )sender {
     [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegmentIndex forKey:@"pencilHoldMode"];
+    [self updatePencilStackVisibility];
 }
 
 - (void) mapGyroToChanged:(UISegmentedControl* )sender {
@@ -2691,7 +2910,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         BOOL legacyXbox = self.emulatedControllerTypeSelector.selectedSegmentIndex == 0;
         [self setHidden:legacyXbox forStack:_gyroModeStack];
         [self setHidden:legacyXbox forStack:_gyroSensitivityStack];
-        [touchAndControlSection updateViewForFoldState];
+        [self refreshSettingsLayout];
         return;
     }
 
@@ -2709,27 +2928,16 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self setHidden:!stickOrMouseMapping forStack:_gyroInvertPitchStack];
     [self setHidden:!stickOrMouseMapping forStack:_gyroInvertYawStack];
 
-    [touchAndControlSection updateViewForFoldState];
+    [self refreshSettingsLayout];
 }
 
 // Helper: build one horizontal label+switch row, return the stack and the
 // switch. Caller wires the switch's action to its own handler so each
 // invert axis stays self-contained.
 - (UIStackView*) makeGyroInvertRowWithLabelText:(NSString*)labelText switchOutRef:(UISwitch* __strong*)switchOut {
-    UILabel* label = [[UILabel alloc] init];
-    label.text = labelText;
-    label.font = [UIFont systemFontOfSize:18];
-    label.textColor = [UIColor whiteColor];
-    [label.widthAnchor constraintEqualToConstant:200].active = YES;
-
     UISwitch* sw = [[UISwitch alloc] init];
     *switchOut = sw;
-
-    UIStackView* stack = [[UIStackView alloc] initWithArrangedSubviews:@[label, sw]];
-    stack.axis = UILayoutConstraintAxisHorizontal;
-    stack.spacing = 8;
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    return stack;
+    return [self swapButtonRowWithLabel:[self rowLabelWithText:labelText] switch:sw];
 }
 
 - (void) installGyroInvertControls {
@@ -2824,9 +3032,9 @@ BOOL isCustomResolution(int resolutionSelected) {
 
     [self setHidden:!(sender.selectedSegmentIndex == RelativeTouch) forStack:self.mousePointerVelocityStack];
     [self setHidden:![self isNotNativeTouchOnly] forStack:self.onScreenWidgetStack];
-    [self setHidden:![self isNotNativeTouchOnly] forStack:self.swapAbaxyStack];
+    // Swap A/B and X/Y apply to physical controllers only: shown in every touch mode.
 
-    [touchAndControlSection updateViewForFoldState];
+    [self refreshSettingsLayout];
 }
 
 - (void)emulatedControllerTypeChanged:(UISegmentedControl* )sender{
@@ -2834,7 +3042,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 - (void)setHidden:(BOOL)hidden forStack:(UIStackView* )stack{
-    // CGFloat previousSpacing = stack.spacing;
+    if (!stack) return;
     if(hidden){
         stack.hidden = YES;
         [hiddenStacks addObject:stack];
@@ -2843,6 +3051,8 @@ BOOL isCustomResolution(int resolutionSelected) {
         stack.hidden = NO;
         [hiddenStacks removeObject:stack];
     }
+    // Separators and empty groups follow the rows that are left showing.
+    [self scheduleSettingsLayoutRefresh];
 }
 
 - (void)enableOswForNativeTouchSwitchFlipped:(UISwitch *)sender{
@@ -2850,7 +3060,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self setHidden:!sender.isOn forStack:_onScreenWidgetStack];
     //[self setHidden:!sender.isOn forStack:_swapAbaxyStack];
     //self.swapAbaxyStack.hidden = !sender.isOn;
-    [touchAndControlSection updateViewForFoldState];
+    [self refreshSettingsLayout];
 }
 
 
@@ -3121,41 +3331,43 @@ BOOL isCustomResolution(int resolutionSelected) {
 }
 
 
+// Row titles take the primary text token. Controls (segmented controls,
+// buttons, switches, ...) draw their own labels and are never walked into;
+// labels with an identifier (value labels, section titles) keep their color.
 - (void)updateThemeForLabels:(UIView *)view {
     for (UIView *subview in view.subviews) {
+        if ([subview isKindOfClass:[UIControl class]]) continue;
         if ([subview isKindOfClass:[UILabel class]]) {
             UILabel *label = (UILabel *)subview;
-            if(label.accessibilityIdentifier != nil) break;
-            if (@available(iOS 13.0, *)) {
-                label.layer.filters = nil;
-                label.textColor = [ThemeManager textColor];
-            } else {
-                UIView *view = label;
-                bool isPartOfSelector = false;
-                while (view) {
-                    if ([view isKindOfClass:[UISegmentedControl class]]) {
-                        isPartOfSelector = true;
-                        break;
-                    }
-                    view = view.superview;
-                }
-                if(!isPartOfSelector) label.textColor = [UIColor whiteColor];
-            }
+            if (label.accessibilityIdentifier == nil) label.textColor = [ThemeManager sidebarTextPrimary];
+            continue;
         }
         [self updateThemeForLabels:subview];
     }
 }
 
+- (void)styleSegmentedControl:(UISegmentedControl *)selector {
+    selector.backgroundColor = [ThemeManager sidebarControlFill];
+    selector.selectedSegmentTintColor = [ThemeManager sidebarAccent];
+    [selector setTitleTextAttributes:@{NSForegroundColorAttributeName: [ThemeManager sidebarTextPrimary]} forState:UIControlStateNormal];
+    [selector setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor whiteColor]} forState:UIControlStateSelected];
+    [selector setTitleTextAttributes:@{NSForegroundColorAttributeName: [ThemeManager sidebarTextSecondary]} forState:UIControlStateDisabled];
+}
+
 - (void)updateThemeForSelectors:(UIView *)view {
     for (UIView *subview in view.subviews) {
         if ([subview isKindOfClass:[UISegmentedControl class]]) {
-            UISegmentedControl *selector = (UISegmentedControl *)subview;
-            if (@available(iOS 13.0, *)) {
-                selector.selectedSegmentTintColor = [ThemeManager appSecondaryColor];
-            } else {
-                selector.tintColor = [ThemeManager appSecondaryColor];
-            }
+            [self styleSegmentedControl:(UISegmentedControl *)subview];
+            continue;
         }
+        if ([subview isKindOfClass:[UISwitch class]]) {
+            UISwitch *switchControl = (UISwitch *)subview;
+            switchControl.onTintColor = [ThemeManager sidebarAccent];
+            switchControl.backgroundColor = [ThemeManager sidebarControlFill]; // off-state track
+            switchControl.layer.cornerRadius = switchControl.intrinsicContentSize.height / 2;
+            continue;
+        }
+        if ([subview isKindOfClass:[UIControl class]]) continue;
         [self updateThemeForSelectors:subview];
     }
 }
@@ -3164,19 +3376,35 @@ BOOL isCustomResolution(int resolutionSelected) {
     for (UIView *subview in view.subviews) {
         if ([subview isKindOfClass:[UISlider class]]) {
             UISlider *slider = (UISlider *)subview;
-            slider.tintColor = [ThemeManager appSecondaryColor];
-
+            slider.minimumTrackTintColor = [ThemeManager sidebarAccent];
+            slider.maximumTrackTintColor = [ThemeManager sidebarControlFill];
+            slider.thumbTintColor = [UIColor whiteColor];
+            continue;
         }
+        if ([subview isKindOfClass:[UIControl class]]) continue;
         [self updateThemeForSliders:subview];
     }
 }
 
-
+// Styles every row the sidebar owns, including rows not currently on screen
+// (favorites mode shows only some of them).
 - (void)updateTheme{
-    self.view.backgroundColor = [ThemeManager appBackgroundColor];
-    [self updateThemeForLabels:self.view];
-    [self updateThemeForSelectors:self.view];
-    [self updateThemeForSliders:self.view];
+    self.view.backgroundColor = [ThemeManager sidebarBackground];
+    self.scrollView.backgroundColor = [ThemeManager sidebarBackground];
+    NSMutableArray<UIView *> *roots = [NSMutableArray arrayWithObject:self.view];
+    for (UIView *stack in _settingStackDict.allValues) {
+        if (![stack isDescendantOfView:self.view]) [roots addObject:stack];
+    }
+    for (UIView *root in roots) {
+        [self updateThemeForLabels:root];
+        [self updateThemeForSelectors:root];
+        [self updateThemeForSliders:root];
+    }
+    UILabel *frameQueueCaption = self.frameQueueSizeStack.arrangedSubviews.count > 2 ? (UILabel *)self.frameQueueSizeStack.arrangedSubviews[2] : nil;
+    if ([frameQueueCaption isKindOfClass:[UILabel class]]) {
+        frameQueueCaption.textColor = [ThemeManager sidebarTextSecondary];
+        frameQueueCaption.accessibilityIdentifier = @"captionLabel";
+    }
 }
 
 - (void) frameQueueSizeSliderMoved:(UISlider* )sender {
@@ -3201,7 +3429,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         [self.screenRatioStack setHidden:!sender.isOn];
     }
     if (self->videoSection) {
-        [self->videoSection updateViewForFoldState];
+        [self refreshSettingsLayout];
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:@"ScreenChanged" object:self];
 }

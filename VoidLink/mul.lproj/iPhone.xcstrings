@@ -349,126 +349,6 @@
         }
       }
     },
-    "6g1-G6-jZx.segmentTitles[0]" : {
-      "comment" : "Class = \"UISegmentedControl\"; 6g1-G6-jZx.segmentTitles[0] = \"3 Finger Tap\"; ObjectID = \"6g1-G6-jZx\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "3 Finger Tap"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "3指轻按"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "3指輕按"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "3指輕按"
-          }
-        }
-      }
-    },
-    "6g1-G6-jZx.segmentTitles[1]" : {
-      "comment" : "Class = \"UISegmentedControl\"; 6g1-G6-jZx.segmentTitles[1] = \"4 Finger Tap\"; ObjectID = \"6g1-G6-jZx\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "4 Finger Tap"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "4指轻按"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "4指輕按"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "4指輕按"
-          }
-        }
-      }
-    },
-    "6g1-G6-jZx.segmentTitles[2]" : {
-      "comment" : "Class = \"UISegmentedControl\"; 6g1-G6-jZx.segmentTitles[2] = \"5 Finger Tap\"; ObjectID = \"6g1-G6-jZx\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "5 Finger Tap"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "5指轻按"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "5指輕按"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "5指輕按"
-          }
-        }
-      }
-    },
-    "6g1-G6-jZx.segmentTitles[3]" : {
-      "comment" : "Class = \"UISegmentedControl\"; 6g1-G6-jZx.segmentTitles[3] = \"Disabled\"; ObjectID = \"6g1-G6-jZx\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Disabled"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "禁用"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "禁用"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "禁用"
-          }
-        }
-      }
-    },
     "7nX-ra-hKS.text" : {
       "comment" : "Class = \"UILabel\"; text = \"HDR\"; ObjectID = \"7nX-ra-hKS\";",
       "extractionState" : "extracted_with_value",
@@ -855,36 +735,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "單點滑鼠"
-          }
-        }
-      }
-    },
-    "awK-Ei-T9i.text" : {
-      "comment" : "Class = \"UILabel\"; text = \"Open Toolbox in Streaming\"; ObjectID = \"awK-Ei-T9i\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Toolbox in Streaming"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "串流中打开工具箱"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "串流中開啟工具箱"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "串流中開啟工具箱"
           }
         }
       }
@@ -1509,36 +1359,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "test"
-          }
-        }
-      }
-    },
-    "epe-C9-jWg.text" : {
-      "comment" : "Class = \"UILabel\"; text = \"Open Settings in Streaming\"; ObjectID = \"epe-C9-jWg\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings in Streaming"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "串流中打开设置菜单"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "串流中開啟設定選單"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "串流中開啟設定選單"
           }
         }
       }
@@ -2173,66 +1993,6 @@
         }
       }
     },
-    "oBs-zz-ZQv.segmentTitles[0]" : {
-      "comment" : "Class = \"UISegmentedControl\"; oBs-zz-ZQv.segmentTitles[0] = \"Slide From Left Edge\"; ObjectID = \"oBs-zz-ZQv\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Slide From Left Edge"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "左边缘滑动"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從左側邊緣滑動"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從左側邊緣滑動"
-          }
-        }
-      }
-    },
-    "oBs-zz-ZQv.segmentTitles[1]" : {
-      "comment" : "Class = \"UISegmentedControl\"; oBs-zz-ZQv.segmentTitles[1] = \"Slide From Right Edge\"; ObjectID = \"oBs-zz-ZQv\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Slide From Right Edge"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "右边缘滑动"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從右側邊緣滑動"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從右側邊緣滑動"
-          }
-        }
-      }
-    },
     "ojp-aS-m8w.segmentTitles[0]" : {
       "comment" : "Class = \"UISegmentedControl\"; ojp-aS-m8w.segmentTitles[0] = \"slide to release\"; ObjectID = \"ojp-aS-m8w\";",
       "extractionState" : "extracted_with_value",
@@ -2379,36 +2139,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "效能資料圖層"
-          }
-        }
-      }
-    },
-    "PHm-2D-t4G.text" : {
-      "comment" : "Class = \"UILabel\"; text = \"Toggle Local Soft Keyboard\"; ObjectID = \"PHm-2D-t4G\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Toggle Local Soft Keyboard"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开软键盘"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "開啟軟鍵盤"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "開啟軟鍵盤"
           }
         }
       }
@@ -3549,66 +3279,6 @@
           "stringUnit" : {
             "state" : "needs_review",
             "value" : "喚醒本地軟鍵盤時，抬升串流畫面"
-          }
-        }
-      }
-    },
-    "wOV-Sp-UUE.segmentTitles[0]" : {
-      "comment" : "Class = \"UISegmentedControl\"; wOV-Sp-UUE.segmentTitles[0] = \"Slide From Left Edge\"; ObjectID = \"wOV-Sp-UUE\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Slide From Left Edge"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "左边缘滑动"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從左側邊緣滑動"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從左側邊緣滑動"
-          }
-        }
-      }
-    },
-    "wOV-Sp-UUE.segmentTitles[1]" : {
-      "comment" : "Class = \"UISegmentedControl\"; wOV-Sp-UUE.segmentTitles[1] = \"Slide From Right Edge\"; ObjectID = \"wOV-Sp-UUE\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Slide From Right Edge"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "右边缘滑动"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從右側邊緣滑動"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從右側邊緣滑動"
           }
         }
       }

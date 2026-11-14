@@ -10,6 +10,14 @@
 #import "MenuSectionView.h"
 #import "ThemeManager.h"
 
+const CGFloat MenuSectionRowInset = 16;
+
+static const CGFloat MenuSectionRowVerticalPadding = 8;
+static const CGFloat MenuSectionRowMinHeight = 44;
+static const CGFloat MenuSectionCardCornerRadius = 12;
+static const CGFloat MenuSectionCardVerticalPadding = 4;
+static NSString *const MenuSectionRowSeparatorIdentifier = @"rowSeparator";
+static NSString *const MenuSectionRowMinHeightIdentifier = @"rowMinHeight";
 
 @interface MenuSectionView ()
 
@@ -18,9 +26,10 @@
 @property (nonatomic, strong) UIImageView *iconImageView;
 @property (nonatomic, strong) UIButton *toggleButton;
 @property (nonatomic, strong) UIButton *toggleArea;
-@property (nonatomic, strong) NSLayoutConstraint *heightConstraint;
 @property (nonatomic, strong) UIView *headerView;
-@property (nonatomic, strong) UIView *separatorLine;
+@property (nonatomic, strong) UIView *cardView;
+@property (nonatomic, strong) NSLayoutConstraint *expandedBottomConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *collapsedBottomConstraint;
 
 @end
 
@@ -43,181 +52,186 @@
 }
 
 - (void)commonInit {
-    // 默认值
     _leadingTrailingPadding = 0;
-    _separatorLinePadding = 40;
+    _separatorLinePadding = 22; // gap below the card, before the next section
     _sectionTitle = @"Section";
     _expanded = YES;
     _backgroundColor = [UIColor clearColor];
-    _rootStackViewSpacing = [self isIPhone] ? 10 : 18;
+    _rootStackViewSpacing = 0;
     _subStackViews = [NSMutableArray array];
     _headerViewHeight = 37;
-    _headerViewVerticalSpacing = 25;
-    
-    // 设置视图
-    self.layer.cornerRadius = 10.0;
-    self.layer.masksToBounds = YES;
+    _headerViewVerticalSpacing = 6;
+
     self.backgroundColor = _backgroundColor;
-    
-    // 头部视图（包含图标和标题）
+
+    // Header: icon, title, fold chevron
     _headerView = [[UIView alloc] init];
     _headerView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_headerView];
-    
-    // 图标视图
+
     _iconImageView = [[UIImageView alloc] init];
     _iconImageView.contentMode = UIViewContentModeScaleAspectFit;
     _iconImageView.translatesAutoresizingMaskIntoConstraints = NO;
-    _iconImageView.tintColor = [ThemeManager textColor];
+    _iconImageView.tintColor = [ThemeManager sidebarTextPrimary];
     [_headerView addSubview:_iconImageView];
-    
-    // 标题标签
+
     _titleLabel = [[UILabel alloc] init];
     _titleLabel.text = _sectionTitle;
-    _titleLabel.font = [UIFont systemFontOfSize:23 weight:UIFontWeightMedium];
-    _titleLabel.textColor = [ThemeManager textColor];
+    _titleLabel.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
+    _titleLabel.textColor = [ThemeManager sidebarTextPrimary];
     _titleLabel.textAlignment = NSTextAlignmentLeft;
+    _titleLabel.accessibilityIdentifier = @"sectionTitle"; // keeps the theme pass off it
     _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [_headerView addSubview:_titleLabel];
-    
-    // 切换按钮
+
     _toggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
     _toggleArea = [UIButton buttonWithType:UIButtonTypeSystem];
-    if (@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:_headerViewHeight*0.31 weight:UIImageSymbolWeightBold];
-        [_toggleButton setImage:[UIImage systemImageNamed:@"chevron.left" withConfiguration:config] forState:UIControlStateNormal];
-    } else {
-        // [_toggleButton setTitle:@"<" forState:UIControlStateNormal];
-    }
+    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:_headerViewHeight*0.31 weight:UIImageSymbolWeightBold];
+    [_toggleButton setImage:[UIImage systemImageNamed:@"chevron.left" withConfiguration:config] forState:UIControlStateNormal];
+    _toggleButton.tintColor = [ThemeManager sidebarTextSecondary];
     [_toggleButton addTarget:self action:@selector(toggleFold) forControlEvents:UIControlEventTouchUpInside];
     [_toggleArea addTarget:self action:@selector(toggleFold) forControlEvents:UIControlEventTouchUpInside];
     _toggleButton.translatesAutoresizingMaskIntoConstraints = NO;
     _toggleArea.translatesAutoresizingMaskIntoConstraints = NO;
-    _toggleButton.contentEdgeInsets = UIEdgeInsetsMake(-10,-10,-10,-10); // 上下左右各扩展 20pt
     [_headerView addSubview:_toggleButton];
     [_headerView addSubview:_toggleArea];
 
-    // 根stackView
+    // Card holding the rows
+    _cardView = [[UIView alloc] init];
+    _cardView.translatesAutoresizingMaskIntoConstraints = NO;
+    _cardView.backgroundColor = [ThemeManager sidebarCard];
+    _cardView.layer.cornerRadius = MenuSectionCardCornerRadius;
+    _cardView.layer.cornerCurve = kCACornerCurveContinuous;
+    [self addSubview:_cardView];
+
     _rootStackView = [[UIStackView alloc] init];
     _rootStackView.axis = UILayoutConstraintAxisVertical;
     _rootStackView.spacing = _rootStackViewSpacing;
     _rootStackView.translatesAutoresizingMaskIntoConstraints = NO;
+    [_cardView addSubview:_rootStackView];
 
-    [self addSubview:_rootStackView];
-    
-    // 分隔线
-    _separatorLine = [[UIView alloc] init];
-    _separatorLine.backgroundColor = [ThemeManager separatorColor];
-    _separatorLine.translatesAutoresizingMaskIntoConstraints = NO;
-    
-    [self addSubview:_separatorLine];
-    
-    // 高度约束
-    _heightConstraint = [self.heightAnchor constraintEqualToConstant:44];
-    _heightConstraint.active = YES;
-    
-    // 布局
     [self setupConstraints];
     [self updateViewForFoldState];
 }
 
 - (void)setupConstraints {
-    // 头部视图约束
+    CGFloat iconSize = _headerViewHeight - 6;
     [NSLayoutConstraint activateConstraints:@[
         [_headerView.topAnchor constraintEqualToAnchor:self.topAnchor],
         [_headerView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
         [_headerView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [_headerView.heightAnchor constraintEqualToConstant:_headerViewHeight]
-    ]];
-    
-    // 图标约束
-    [NSLayoutConstraint activateConstraints:@[
-        [_iconImageView.centerXAnchor constraintEqualToAnchor:_headerView.leadingAnchor constant:_leadingTrailingPadding+_headerViewHeight/2-3],
+        [_headerView.heightAnchor constraintEqualToConstant:_headerViewHeight],
+
+        [_iconImageView.leadingAnchor constraintEqualToAnchor:_headerView.leadingAnchor constant:4],
         [_iconImageView.centerYAnchor constraintEqualToAnchor:_headerView.centerYAnchor],
-        // [_iconImageView.topAnchor constraintEqualToAnchor:_headerView.topAnchor],
-        [_iconImageView.widthAnchor constraintEqualToConstant:_headerViewHeight-6],
-        //[_iconImageView.heightAnchor constraintEqualToConstant:_headerViewHeight-6]
-    ]];
-    
-    // 标题约束
-    if(@available(iOS 13.0, *)){
-        [NSLayoutConstraint activateConstraints:@[
-            [_titleLabel.leadingAnchor constraintEqualToAnchor:_iconImageView.trailingAnchor constant:8],
-            [_titleLabel.centerYAnchor constraintEqualToAnchor:_headerView.centerYAnchor],
-            [_titleLabel.trailingAnchor constraintEqualToAnchor:_toggleButton.leadingAnchor constant:-8]
-        ]];
-    }
-    else [NSLayoutConstraint activateConstraints:@[
-            [_titleLabel.leadingAnchor constraintEqualToAnchor:_headerView.leadingAnchor constant:0],
-            [_titleLabel.centerYAnchor constraintEqualToAnchor:_headerView.centerYAnchor],
-            [_titleLabel.trailingAnchor constraintEqualToAnchor:_toggleButton.leadingAnchor constant:-8]
-        ]];
-    
-    // 切换按钮约束
-    [NSLayoutConstraint activateConstraints:@[
-        [_toggleButton.trailingAnchor constraintEqualToAnchor:_headerView.trailingAnchor constant:-_leadingTrailingPadding],
+        [_iconImageView.widthAnchor constraintEqualToConstant:iconSize],
+
+        [_titleLabel.leadingAnchor constraintEqualToAnchor:_iconImageView.trailingAnchor constant:8],
+        [_titleLabel.centerYAnchor constraintEqualToAnchor:_headerView.centerYAnchor],
+        [_titleLabel.trailingAnchor constraintEqualToAnchor:_toggleButton.leadingAnchor constant:-8],
+
+        [_toggleButton.trailingAnchor constraintEqualToAnchor:_headerView.trailingAnchor constant:-4],
         [_toggleButton.centerYAnchor constraintEqualToAnchor:_headerView.centerYAnchor],
         [_toggleButton.widthAnchor constraintEqualToConstant:_headerViewHeight*0.8],
-        [_toggleButton.heightAnchor constraintEqualToConstant:_headerViewHeight*0.8]
-    ]];
-    
-    [NSLayoutConstraint activateConstraints:@[
+        [_toggleButton.heightAnchor constraintEqualToConstant:_headerViewHeight*0.8],
+
         [_toggleArea.leadingAnchor constraintEqualToAnchor:_headerView.leadingAnchor],
         [_toggleArea.centerYAnchor constraintEqualToAnchor:_headerView.centerYAnchor],
         [_toggleArea.trailingAnchor constraintEqualToAnchor:_toggleButton.leadingAnchor],
-        //[_toggleArea.widthAnchor constraintEqualToConstant:_headerViewHeight],
-        [_toggleArea.heightAnchor constraintEqualToConstant:_headerViewHeight]
-    ]];
+        [_toggleArea.heightAnchor constraintEqualToConstant:_headerViewHeight],
 
-    [self layoutIfNeeded];
-        
-    // 根stackView约束
-    [NSLayoutConstraint activateConstraints:@[
-        [_rootStackView.topAnchor constraintEqualToAnchor:self.topAnchor constant:_headerViewHeight+_headerViewVerticalSpacing],
-        [_rootStackView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:_leadingTrailingPadding],
-        [_rootStackView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-_leadingTrailingPadding],
-        [_rootStackView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-1] // 为分隔线留出空间
+        [_cardView.topAnchor constraintEqualToAnchor:_headerView.bottomAnchor constant:_headerViewVerticalSpacing],
+        [_cardView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [_cardView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+
+        [_rootStackView.topAnchor constraintEqualToAnchor:_cardView.topAnchor constant:MenuSectionCardVerticalPadding],
+        [_rootStackView.bottomAnchor constraintEqualToAnchor:_cardView.bottomAnchor constant:-MenuSectionCardVerticalPadding],
+        [_rootStackView.leadingAnchor constraintEqualToAnchor:_cardView.leadingAnchor constant:MenuSectionRowInset],
+        [_rootStackView.trailingAnchor constraintEqualToAnchor:_cardView.trailingAnchor constant:-MenuSectionRowInset],
     ]];
-    
-    // 分隔线约束
-    self.clipsToBounds = false;//mark: settingMenuLayout
+    _expandedBottomConstraint = [_cardView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-_separatorLinePadding];
+    _collapsedBottomConstraint = [_headerView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-_headerViewVerticalSpacing];
+}
+
+#pragma mark - Row styling
+
++ (void)styleRow:(UIStackView *)row indented:(BOOL)indented {
+    if (!row) return;
+    // Storyboard rows carry fixed widths (380pt) from the old free-standing
+    // layout; inside a card the row width comes from the card.
+    NSMutableArray<NSLayoutConstraint *> *fixedWidths = [NSMutableArray array];
+    for (NSLayoutConstraint *constraint in row.constraints) {
+        if (constraint.firstItem == row && constraint.firstAttribute == NSLayoutAttributeWidth
+            && constraint.secondItem == nil && constraint.active) [fixedWidths addObject:constraint];
+    }
+    [NSLayoutConstraint deactivateConstraints:fixedWidths];
+    row.layoutMarginsRelativeArrangement = YES;
+    row.layoutMargins = UIEdgeInsetsMake(MenuSectionRowVerticalPadding, indented ? MenuSectionRowInset : 0, MenuSectionRowVerticalPadding, 0);
+    if (row.axis == UILayoutConstraintAxisHorizontal) row.alignment = UIStackViewAlignmentCenter;
+
+    BOOL hasMinHeight = NO;
+    for (NSLayoutConstraint *constraint in row.constraints) {
+        if ([constraint.identifier isEqualToString:MenuSectionRowMinHeightIdentifier]) { hasMinHeight = YES; break; }
+    }
+    if (!hasMinHeight) {
+        // Below required so a hidden row can still collapse to zero height.
+        NSLayoutConstraint *minHeight = [row.heightAnchor constraintGreaterThanOrEqualToConstant:MenuSectionRowMinHeight];
+        minHeight.priority = UILayoutPriorityRequired - 1;
+        minHeight.identifier = MenuSectionRowMinHeightIdentifier;
+        minHeight.active = YES;
+    }
+    [self separatorForRow:row];
+}
+
++ (UIView *)separatorForRow:(UIStackView *)row {
+    for (UIView *view in row.subviews) {
+        if ([view.accessibilityIdentifier isEqualToString:MenuSectionRowSeparatorIdentifier]) return view;
+    }
+    UIView *separator = [[UIView alloc] init];
+    separator.accessibilityIdentifier = MenuSectionRowSeparatorIdentifier;
+    separator.userInteractionEnabled = NO;
+    separator.backgroundColor = [ThemeManager sidebarSeparator];
+    separator.translatesAutoresizingMaskIntoConstraints = NO;
+    separator.hidden = YES;
+    [row addSubview:separator];
+    CGFloat scale = UIScreen.mainScreen.scale > 0 ? UIScreen.mainScreen.scale : 2;
+    // Starts at the row's text edge (16pt into the card) and runs to the card's edge.
     [NSLayoutConstraint activateConstraints:@[
-        //[_separatorLine.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-        //[_separatorLine.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [_separatorLine.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-        [_separatorLine.widthAnchor constraintEqualToConstant:1000], // //mark: settingMenuLayout
-        [_separatorLine.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-        [_separatorLine.heightAnchor constraintEqualToConstant:2]
+        [separator.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [separator.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [separator.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:MenuSectionRowInset],
+        [separator.heightAnchor constraintEqualToConstant:1.0 / scale],
     ]];
-    
-    [NSLayoutConstraint activateConstraints:@[
-        [self.headerView.topAnchor constraintEqualToAnchor:self.topAnchor constant:0],
-        [self.rootStackView.topAnchor constraintEqualToAnchor:self.headerView.bottomAnchor constant:0],
-    ]];
+    return separator;
+}
+
++ (void)refreshSeparatorsInStack:(UIStackView *)container {
+    BOOL first = YES;
+    for (UIView *view in container.arrangedSubviews) {
+        if (![view isKindOfClass:[UIStackView class]]) continue;
+        UIView *separator = [self separatorForRow:(UIStackView *)view];
+        if (view.hidden) { separator.hidden = YES; continue; }
+        separator.hidden = first;
+        first = NO;
+    }
 }
 
 #pragma mark - Public Methods
 
 - (void)setSectionWithIcon:(UIImage *)icon andSize:(CGFloat)size{
-    if (@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *config;
-        if(icon.isSymbolImage) config = [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightBold];
-        else{
-            config = [UIImageSymbolConfiguration configurationWithPointSize:size];
-            icon = [icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        }
-        _iconImageView.image = [icon imageWithConfiguration:config];
-    } else {
-        _iconImageView.image = icon;
+    UIImageSymbolConfiguration *config;
+    if(icon.isSymbolImage) config = [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightSemibold];
+    else{
+        config = [UIImageSymbolConfiguration configurationWithPointSize:size];
+        icon = [icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
     }
-    _iconImageView.tintColor = [ThemeManager textColor];
+    _iconImageView.image = [icon imageWithConfiguration:config];
+    _iconImageView.tintColor = [ThemeManager sidebarTextPrimary];
     _iconImageView.hidden = (icon == nil);
-    [self updateLayout];
 }
 
 - (void)setLeadingTrailingPadding:(CGFloat)leadingTrailingPadding {
     _leadingTrailingPadding = leadingTrailingPadding;
-    [self updateLayout];
 }
 
 - (void)setSectionTitle:(NSString *)sectionTitle {
@@ -226,9 +240,8 @@
 }
 
 - (void)setExpanded:(BOOL)isExpanded {
-    if (_expanded != isExpanded) {
-        _expanded = isExpanded;}
-        [self updateViewForFoldState];
+    _expanded = isExpanded;
+    [self updateViewForFoldState];
 }
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
@@ -239,22 +252,19 @@
 - (void)setRootStackViewSpacing:(CGFloat)rootStackViewSpacing {
     _rootStackViewSpacing = rootStackViewSpacing;
     _rootStackView.spacing = rootStackViewSpacing;
-    [self updateLayout];
 }
 
 - (void)addSubStackView:(UIStackView *)stackView {
+    if (!stackView) return;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     [UIView performWithoutAnimation:^{
-        if (![_subStackViews containsObject:stackView]) {
-            [_subStackViews addObject:stackView];
-            [_rootStackView addArrangedSubview:stackView];
-            //[_rootStackView layoutIfNeeded];
-            //[self updateLayout];
+        if (![self->_subStackViews containsObject:stackView]) {
+            [self->_subStackViews addObject:stackView];
+            [self->_rootStackView addArrangedSubview:stackView];
         }
     }];
     [CATransaction commit];
-    // NSLog(@"rootStack height2: %f", _rootStackView.frame.size.height);
 }
 
 - (void)addToParentStack:(UIStackView *)parentStack {
@@ -273,43 +283,20 @@
         [_subStackViews removeObject:stackView];
         [_rootStackView removeArrangedSubview:stackView];
         [stackView removeFromSuperview];
-        [self updateLayout];
+        [self updateViewForFoldState];
     }
     [CATransaction commit];
 }
 
-
 - (void)updateLayout {
-    // 更新边距约束
-    for (NSLayoutConstraint *constraint in self.constraints) {
-        if (constraint.firstItem == _rootStackView && constraint.firstAttribute == NSLayoutAttributeLeading) {
-            constraint.constant = _leadingTrailingPadding;
-        } else if (constraint.firstItem == _rootStackView && constraint.firstAttribute == NSLayoutAttributeTrailing) {
-            constraint.constant = -_leadingTrailingPadding;
-        }
-    }
-    
-    for (NSLayoutConstraint *constraint in _headerView.constraints) {
-        if (constraint.firstItem == _iconImageView && constraint.firstAttribute == NSLayoutAttributeLeading) {
-            constraint.constant = _leadingTrailingPadding;
-        } else if (constraint.firstItem == _toggleButton && constraint.firstAttribute == NSLayoutAttributeTrailing) {
-            constraint.constant = -_leadingTrailingPadding;
-        }
-    }
-    
     [self setNeedsLayout];
     [self layoutIfNeeded];
 }
 
 #pragma mark - Private Methods
 
-- (BOOL)isIPhone {
-    return [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone;
-}
-
 - (void)toggleFold {
     self.expanded = !self.expanded;
-    [self updateViewForFoldState];
 }
 
 - (SettingsMenuMode)getSettingsMenuMode {
@@ -318,52 +305,29 @@
     } else return AllSettings;
 }
 
-
+// Self-sizing: the section's height follows its header and (when expanded)
+// its card; hidden rows collapse inside the card's stack.
 - (void)updateViewForFoldState {
-    [self setupConstraints];
     NSInteger visibleCount = 0;
     for (UIView *subview in _rootStackView.arrangedSubviews) {
-        if (!subview.isHidden) {
-            visibleCount++;
-        }
+        if (!subview.isHidden) visibleCount++;
     }
     self.hidden = visibleCount == 0;
+
+    [MenuSectionView refreshSeparatorsInStack:_rootStackView];
+
+    _cardView.hidden = !_expanded;
     if (_expanded) {
-        _rootStackView.hidden = NO;
-        _separatorLine.hidden = NO;
-        CGSize fittingSize = [self.rootStackView systemLayoutSizeFittingSize:UILayoutFittingCompressedSize];
-        //CGSize fittingSize = [self.rootStackView systemLayoutSizeFittingSize:UILayoutFittingExpandedSize];
-        CGFloat rootStackViewHeight = fittingSize.height;
-        fittingSize = [self.headerView systemLayoutSizeFittingSize:UILayoutFittingCompressedSize];
-        CGFloat headerHeight = fittingSize.height;
-        
-        self.heightConstraint.constant = headerHeight + _headerViewVerticalSpacing + rootStackViewHeight + _separatorLinePadding + 1;
-    
-        [UIView animateWithDuration:0 animations:^{
-            self.toggleButton.transform = CGAffineTransformMakeRotation(M_PI+M_PI_2);
-            [NSLayoutConstraint activateConstraints:@[
-                [self.rootStackView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-self.separatorLinePadding],
-                // [self.rootStackView.topAnchor constraintEqualToAnchor:self.headerView.bottomAnchor constant:0],
-            ]];
-            [self layoutIfNeeded];
-        }];
+        _collapsedBottomConstraint.active = NO;
+        _expandedBottomConstraint.active = YES;
+        _toggleButton.transform = CGAffineTransformMakeRotation(M_PI+M_PI_2);
     } else {
-        // 折叠状态
-        CGSize fittingSize = [self.headerView systemLayoutSizeFittingSize:UILayoutFittingCompressedSize];
-        _rootStackView.hidden = YES;
-        _separatorLine.hidden = NO;
-        _heightConstraint.constant = fittingSize.height + _headerViewVerticalSpacing;
-        // [self updateLayout];
-        [UIView animateWithDuration:0 animations:^{
-            self.toggleButton.transform = CGAffineTransformIdentity;
-            [NSLayoutConstraint activateConstraints:@[
-                [self.headerView.topAnchor constraintEqualToAnchor:self.topAnchor constant:0],
-                // [self.rootStackView.topAnchor constraintEqualToAnchor:self.headerView.bottomAnchor constant:0],
-            ]];
-            [self layoutIfNeeded];
-        }];
+        _expandedBottomConstraint.active = NO;
+        _collapsedBottomConstraint.active = YES;
+        _toggleButton.transform = CGAffineTransformIdentity;
     }
-    
+    [self setNeedsLayout];
+
     if ([self.delegate respondsToSelector:@selector(hideOverlappedDynamicLabels)]) {
         [self.delegate hideOverlappedDynamicLabels];
     }

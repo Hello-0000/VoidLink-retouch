@@ -1212,34 +1212,6 @@
                                     <constraint firstAttribute="height" priority="999" constant="56.5" id="yfu-kk-pSf"/>
                                 </constraints>
                             </stackView>
-                            <stackView verifyAmbiguity="off" opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="enq-vm-5pN" userLabel="keyboardToggleFingerNum Stack">
-                                <rect key="frame" x="17" y="884" width="380" height="56.5"/>
-                                <subviews>
-                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Toggle Local Soft Keyboard" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="PHm-2D-t4G">
-                                        <rect key="frame" x="0.0" y="0.0" width="380" height="20.5"/>
-                                        <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                        <color key="tintColor" red="0.81533776120000001" green="0.85979419950000002" blue="0.91372549020000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                        <color key="textColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <nil key="highlightedColor"/>
-                                    </label>
-                                    <segmentedControl opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="top" segmentControlStyle="plain" selectedSegmentIndex="1" id="6g1-G6-jZx" userLabel="localSoftKeyboardGestureSelector">
-                                        <rect key="frame" x="0.0" y="25.5" width="380" height="32"/>
-                                        <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                        <segments>
-                                            <segment title="3 Finger Tap"/>
-                                            <segment title="4 Finger Tap"/>
-                                            <segment title="5 Finger Tap"/>
-                                            <segment title="Disabled"/>
-                                        </segments>
-                                        <color key="tintColor" red="0.6716768742" green="0.61711704730000005" blue="0.99902987480000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <color key="selectedSegmentTintColor" systemColor="linkColor"/>
-                                    </segmentedControl>
-                                </subviews>
-                                <constraints>
-                                    <constraint firstAttribute="width" constant="380" id="EBB-4E-fiS"/>
-                                </constraints>
-                            </stackView>
                             <stackView verifyAmbiguity="off" opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="mgf-RQ-AVP" userLabel="liftStreamViewForKeyboard Stack">
                                 <rect key="frame" x="17" y="958" width="380" height="56.5"/>
                                 <subviews>
@@ -1262,55 +1234,6 @@
                                 </subviews>
                                 <constraints>
                                     <constraint firstAttribute="width" constant="380" id="phf-eN-8sy"/>
-                                </constraints>
-                            </stackView>
-                            <stackView verifyAmbiguity="off" opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="5tz-pA-xIS" userLabel="slideToSettingsScreenEdge Stack">
-                                <rect key="frame" x="15" y="1113" width="380" height="56.5"/>
-                                <subviews>
-                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Open Settings in Streaming" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="epe-C9-jWg">
-                                        <rect key="frame" x="0.0" y="0.0" width="380" height="20.5"/>
-                                        <color key="tintColor" red="0.81533776120000001" green="0.85979419950000002" blue="0.91372549020000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                        <color key="textColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <nil key="highlightedColor"/>
-                                    </label>
-                                    <segmentedControl opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="top" segmentControlStyle="plain" selectedSegmentIndex="0" translatesAutoresizingMaskIntoConstraints="NO" id="oBs-zz-ZQv">
-                                        <rect key="frame" x="0.0" y="25.5" width="380" height="32"/>
-                                        <segments>
-                                            <segment title="Slide From Left Edge"/>
-                                            <segment title="Slide From Right Edge"/>
-                                        </segments>
-                                        <color key="tintColor" red="0.6716768742" green="0.61711704730000005" blue="0.99902987480000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <color key="selectedSegmentTintColor" systemColor="linkColor"/>
-                                    </segmentedControl>
-                                </subviews>
-                                <constraints>
-                                    <constraint firstAttribute="width" constant="380" id="hUY-CH-vch"/>
-                                </constraints>
-                            </stackView>
-                            <stackView verifyAmbiguity="off" opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="rk8-nB-cPk" userLabel="slideToToolboxScreenEdge Stack">
-                                <rect key="frame" x="15" y="1189" width="380" height="56.5"/>
-                                <subviews>
-                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Open Toolbox in Streaming" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="awK-Ei-T9i">
-                                        <rect key="frame" x="0.0" y="0.0" width="380" height="20.5"/>
-                                        <color key="tintColor" red="0.81533776120000001" green="0.85979419950000002" blue="0.91372549020000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                        <color key="textColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <nil key="highlightedColor"/>
-                                    </label>
-                                    <segmentedControl opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="top" segmentControlStyle="plain" selectedSegmentIndex="0" id="wOV-Sp-UUE" userLabel="Command Sending Screen Edge Selector">
-                                        <rect key="frame" x="0.0" y="25.5" width="380" height="32"/>
-                                        <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                        <segments>
-                                            <segment title="Slide From Left Edge"/>
-                                            <segment title="Slide From Right Edge"/>
-                                        </segments>
-                                        <color key="tintColor" red="0.6716768742" green="0.61711704730000005" blue="0.99902987480000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
-                                        <color key="selectedSegmentTintColor" systemColor="linkColor"/>
-                                    </segmentedControl>
-                                </subviews>
-                                <constraints>
-                                    <constraint firstAttribute="width" constant="380" id="QVP-Yj-oLK"/>
                                 </constraints>
                             </stackView>
                             <stackView verifyAmbiguity="off" opaque="NO" contentMode="scaleToFill" ambiguous="YES" axis="vertical" spacing="5" translatesAutoresizingMaskIntoConstraints="NO" id="eom-7m-dH2" userLabel="slideToSettingsDistance Stack">
@@ -1896,13 +1819,6 @@
                         <outlet property="slideToMenuDistanceSlider" destination="XNA-Kx-vqV" id="8oD-Sy-6k7"/>
                         <outlet property="slideToSettingsDistanceStack" destination="eom-7m-dH2" id="m43-tx-nAT"/>
                         <outlet property="slideToSettingsDistanceUILabel" destination="cti-T5-cSE" id="8Xz-vc-bO5"/>
-                        <outlet property="slideToSettingsScreenEdgeSelector" destination="oBs-zz-ZQv" id="Tm5-WE-dPF"/>
-                        <outlet property="slideToSettingsScreenEdgeStack" destination="5tz-pA-xIS" id="JQS-Ov-DcE"/>
-                        <outlet property="slideToSettingsScreenEdgeUILabel" destination="epe-C9-jWg" id="KoF-EI-92a"/>
-                        <outlet property="slideToToolboxScreenEdgeSelector" destination="wOV-Sp-UUE" id="6ZQ-eb-gAa"/>
-                        <outlet property="slideToToolboxScreenEdgeStack" destination="rk8-nB-cPk" id="fdH-ee-0Ul"/>
-                        <outlet property="softKeyboardGestureSelector" destination="6g1-G6-jZx" id="ace-tF-hWR"/>
-                        <outlet property="softKeyboardGestureStack" destination="enq-vm-5pN" id="98s-mz-64n"/>
                         <outlet property="softKeyboardToolbarStack" destination="DC8-5w-oib" id="ti3-PT-mZI"/>
                         <outlet property="softKeyboardToolbarSwitch" destination="c4W-2p-R3A" id="gf6-pq-L8o"/>
                         <outlet property="statsOverlaySelector" destination="Bda-3L-Wtg" id="9kj-wY-VjF"/>
