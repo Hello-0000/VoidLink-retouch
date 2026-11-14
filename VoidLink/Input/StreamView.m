@@ -192,6 +192,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
     UIPencilInteraction *pencilInteraction;
 #endif
     CGFloat HeightViewLiftedTo;
+    CGFloat keyboardLiftTouchPointHeight; // lowest finger of the gesture that opened the keyboard
     UILabel* keyboardToggleTip;
     
     UIKeyModifierFlags comboKeyModifierFlags;
@@ -303,7 +304,9 @@ static __weak StreamView *sPalmClassifier = nil;
     [self addSubview:keyInputField];
     
     isInputingText = false;
-    [self refreshKeyboardToggleRecognizer:settings.keyboardToggleFingers.intValue]; //will be
+    // The multi-finger soft-keyboard gesture is the host VC's hold recognizer now
+    // (StreamGestureBindings); this one only exists for the toolbox flow's 1-finger tap.
+    [self refreshKeyboardToggleRecognizer:0];
     keyboardToggleTip = [[UILabel alloc] init];
     // keyboardToggleTip.frame = CGRectMake(0, 0, 35, 100);
     keyboardToggleTip.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.5];
@@ -330,19 +333,14 @@ static __weak StreamView *sPalmClassifier = nil;
         
     switch (settings.touchMode.intValue) {
         case NativeTouch:
-            keyboardToggleRecognizer.immediateTriggering = false;
             self->touchHandler = [[NativeTouchHandler alloc] initWithView:self andSettings:settings];break;
         case NativeTouchOnly:
-            keyboardToggleRecognizer.immediateTriggering = false;
             self->touchHandler = [[PureNativeTouchHandler alloc] initWithView:self andSettings:settings];break;
         case RelativeTouch:
             self->touchHandler = [[RelativeTouchHandler alloc] initWithView:self andSettings:settings];
-            keyboardToggleRecognizer.immediateTriggering = false;
-            // if(settings.onscreenControls.intValue == OnScreenControlsLevelCustom) keyboardToggleRecognizer.numberOfTouchesRequired = 3; //deprecated: fixing keyboard taps to 3, in order to invoke OSC rebase in stream view by 4-finger tap.
             break;
         case AbsoluteTouch:
             self->touchHandler = [[AbsoluteTouchHandler alloc] initWithView:self];
-            keyboardToggleRecognizer.immediateTriggering = true; //triggers signal in touchesBegan callback stage
             break;
             
         default:
@@ -444,9 +442,12 @@ static __weak StreamView *sPalmClassifier = nil;
 }
 
 
+// 0 removes the tap recognizer (the hold gesture owns the soft keyboard).
 - (void)refreshKeyboardToggleRecognizer:(uint8_t)numberOfTouches{
     [self->_streamFrameTopLayerView removeGestureRecognizer:keyboardToggleRecognizer];
-    keyboardToggleRecognizer = [[CustomTapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleKeyboard)];
+    keyboardToggleRecognizer = nil;
+    if (numberOfTouches == 0) return;
+    keyboardToggleRecognizer = [[CustomTapGestureRecognizer alloc] initWithTarget:self action:@selector(keyboardTapRecognized:)];
     keyboardToggleRecognizer.numberOfTouchesRequired = numberOfTouches; //will be changed accordinly by touch modes.
     keyboardToggleRecognizer.tapDownTimeThreshold = 0.2; // tap down time threshold in seconds.
     keyboardToggleRecognizer.delaysTouchesBegan = NO;
@@ -454,15 +455,37 @@ static __weak StreamView *sPalmClassifier = nil;
     [self->_streamFrameTopLayerView addGestureRecognizer:keyboardToggleRecognizer];
 }
 
+- (void)sendOneShotCommand:(NSString *)cmdString {
+    if (cmdString.length == 0) return;
+#if !TARGET_OS_TV
+    [OnScreenWidgetView sendOneShotCommand:cmdString onScreenControls:onScreenControls];
+#endif
+}
+
+- (void)keyboardTapRecognized:(CustomTapGestureRecognizer *)recognizer {
+    [self toggleKeyboardFromTouchPointHeight:recognizer.lowestTouchPointHeight];
+}
+
+- (void)toggleKeyboardFromTouchPointHeight:(CGFloat)lowestTouchPointHeight {
+    keyboardLiftTouchPointHeight = lowestTouchPointHeight;
+    [self toggleKeyboard];
+}
+
 - (void)keyboardWillShow:(NSNotification *)notification{
     // NSLog(@"keyboard will show markmark %f", CACurrentMediaTime());
+    // The toolbox flow's temporary 1-finger tap has done its job once a keyboard
+    // shows — drop it whether or not the lift below runs (lift off / odd height),
+    // or every plain stream tap would keep toggling the keyboard. The bound hold
+    // gesture closes the keyboard.
+    [self refreshKeyboardToggleRecognizer:0];
+    [keyboardToggleTip removeFromSuperview];
     if(settings.liftStreamViewForKeyboard && !isInputingText){
         NSDictionary *userInfo = notification.userInfo;
         // Get the keyboard size from the notification
         CGRect keyboardFrame = [userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
         // NSLog(@"keyboard will show markmark, lowest height %f", keyboardToggleRecognizer.lowestTouchPointHeight);
         if(keyboardFrame.size.height < CGRectGetHeight([[UIScreen mainScreen] bounds]) * 0.25) return; // return in case of abnormal keyboard height
-        HeightViewLiftedTo = keyboardFrame.size.height - keyboardToggleRecognizer.lowestTouchPointHeight + CGRectGetHeight([[UIScreen mainScreen] bounds]) * 0.1; // lift the StreamView to the height of lowest touch point of multi-finger tap gesture, while reserving the view of 1/10 screen height for remote typing.
+        HeightViewLiftedTo = keyboardFrame.size.height - keyboardLiftTouchPointHeight + CGRectGetHeight([[UIScreen mainScreen] bounds]) * 0.1; // lift the StreamView to the height of lowest touch point of multi-finger tap gesture, while reserving the view of 1/10 screen height for remote typing.
         if(HeightViewLiftedTo < 0) HeightViewLiftedTo = 0;  // set HeightViewLiftedTo to 0 if it is high enough and not going to be covered by keyboard.
         CGRect liftedStreamFrame = self.frame;
         liftedStreamFrame.origin.y -= HeightViewLiftedTo;
@@ -472,8 +495,6 @@ static __weak StreamView *sPalmClassifier = nil;
         [self liftMetalVideoViewIfNeeded:HeightViewLiftedTo];
         
         isInputingText = true;
-        [self refreshKeyboardToggleRecognizer:settings.keyboardToggleFingers.intValue];
-        [keyboardToggleTip removeFromSuperview];
     }
     NSLog(@"keyboard will show %f", CACurrentMediaTime());
 }
@@ -481,8 +502,9 @@ static __weak StreamView *sPalmClassifier = nil;
 // this method also deals with recovering streamview when local keyboard is turned off
 - (void)keyboardWillHide{
     // NSLog(@"keyboard will hide markmark %f", CACurrentMediaTime());
+    [self refreshKeyboardToggleRecognizer:0]; // never leave the toolbox flow's 1-finger tap armed
+    [keyboardToggleTip removeFromSuperview];
 
-    keyboardToggleRecognizer.numberOfTouchesRequired = settings.keyboardToggleFingers.intValue; // reset this number
     if(isInputingText){
         self.frame = _originalFrame;
         

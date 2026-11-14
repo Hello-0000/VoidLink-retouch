@@ -28,6 +28,8 @@
 #import "MetalVideoRenderer.h"
 #import "CustomEdgeSlideGestureRecognizer.h"
 #import "CustomTapGestureRecognizer.h"
+#import "MultiFingerHoldGestureRecognizer.h"
+#import "StreamGestureBindings.h"
 #import "LocalizationHelper.h"
 #import "VoidLink-Swift.h"
 #import "OSCProfilesManager.h"
@@ -256,11 +258,14 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     VideoDecoderRenderer *_videoRenderer;
     BOOL _isRestoringFromPiP;
 #if !TARGET_OS_TV
-    CustomEdgeSlideGestureRecognizer *_slideToSettingsRecognizer;
-    CustomEdgeSlideGestureRecognizer *_slideToCmdToolRecognizer;
-    CustomEdgeSlideGestureRecognizer *_rightEdgeToggleOscRecognizer;
-    CustomEdgeSlideGestureRecognizer *_rightEdgeOverControlRecognizer;
-    CustomTapGestureRecognizer *_oscLayoutTapRecoginizer;
+    // Stream gesture table (StreamGestureBindings), rebuilt by configGestures.
+    // Edge recognizer -> the StreamGestureAction it performs.
+    NSMapTable<UIGestureRecognizer *, NSNumber *> *_edgeGestureActions;
+    // Short (~15pt) edge pairs, see configGestures: passive observer + the one
+    // that withholds touches landing on a tap-style OSC control.
+    NSHashTable<UIGestureRecognizer *> *_shortEdgePassiveRecognizers;
+    NSHashTable<UIGestureRecognizer *> *_shortEdgeOverControlRecognizers;
+    MultiFingerHoldGestureRecognizer *_holdGestureRecognizer;
     LayoutOnScreenControlsViewController *_layoutOnScreenControlsVC;
     ToolboxViewController* toolBoxViewController;
     UIControl *_toolboxOverlay;
@@ -683,67 +688,177 @@ static const NSTimeInterval kStreamSessionResetGapSeconds = 15 * 60;
 }
 
 - (void)configGestures{
-    _slideToSettingsRecognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(edgeSwiped)];
-    _slideToSettingsRecognizer.edges = _settings.slideToSettingsScreenEdge.intValue;
-    _slideToSettingsRecognizer.normalizedThresholdDistance = _settings.slideToSettingsDistance.floatValue;
-    _slideToSettingsRecognizer.delaysTouchesBegan = NO;
-    _slideToSettingsRecognizer.delaysTouchesEnded = NO;
+    _edgeGestureActions = [NSMapTable weakToStrongObjectsMapTable];
+    _shortEdgePassiveRecognizers = [NSHashTable weakObjectsHashTable];
+    _shortEdgeOverControlRecognizers = [NSHashTable weakObjectsHashTable];
+
+    // Edge swipes: one action per edge, from the gesture table.
+    for (NSNumber *triggerNumber in @[@(StreamGestureTriggerLeftEdge), @(StreamGestureTriggerRightEdge)]) {
+        StreamGestureTrigger trigger = triggerNumber.integerValue;
+        StreamGestureAction action = [StreamGestureBindings actionForTrigger:trigger];
+        if (action == StreamGestureActionNone) continue; // unbound edge: no recognizer
+        UIRectEdge edge = trigger == StreamGestureTriggerLeftEdge ? UIRectEdgeLeft : UIRectEdgeRight;
+        if (action == StreamGestureActionSettings || action == StreamGestureActionToolbox) {
+            [self configSheetEdgeGesture:edge action:action];
+        } else {
+            [self configShortEdgeGesture:edge action:action];
+        }
+    }
+
+    // 3/4/5-finger holds. One recognizer serves every hold binding; it decides
+    // per finger count whether to time at all (fingerCountEnabled).
+    _holdGestureRecognizer = [[MultiFingerHoldGestureRecognizer alloc] initWithTarget:self action:@selector(handleHoldGesture:)];
+    _holdGestureRecognizer.streamView = _streamView;
+    __weak typeof(self) weakSelf = self;
+    _holdGestureRecognizer.fingerCountEnabled = ^BOOL(NSInteger fingers) {
+        return [weakSelf holdGestureEnabledForFingers:fingers];
+    };
+    // On self.view (streamFrameTopLayerView): every stream touch passes it in all
+    // touch modes — the bare StreamView (native / relative), the StreamView inside
+    // the zoom scroll view (absolute), and fingers the OSC touch block withholds
+    // (they still hit-test to the StreamView). OSC widgets and controls are
+    // siblings under the same view, so the recognizer can see and skip them.
+    [self.view addGestureRecognizer:_holdGestureRecognizer];
+}
+
+// Settings / toolbox: the long slide (slideToSettingsDistance of the width),
+// passive — it never delays or cancels the view's touches.
+- (void)configSheetEdgeGesture:(UIRectEdge)edge action:(StreamGestureAction)action {
+    CustomEdgeSlideGestureRecognizer *recognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(handleSheetEdgeGesture:)];
+    recognizer.edges = edge;
+    recognizer.normalizedThresholdDistance = _settings.slideToSettingsDistance.floatValue;
+    recognizer.delaysTouchesBegan = NO;
+    recognizer.delaysTouchesEnded = NO;
     // Finger-only: Apple Pencil must stay fully interactive across the whole
     // screen, including the edge zones — it never opens the settings sidebar.
-    _slideToSettingsRecognizer.allowedTouchTypes = @[@(UITouchTypeDirect)];
-    [self.view addGestureRecognizer:_slideToSettingsRecognizer];
-    // Right-side edge is freed; Command Manager is opened by on-screen widget "CMD"
+    recognizer.allowedTouchTypes = @[@(UITouchTypeDirect)];
+    [_edgeGestureActions setObject:@(action) forKey:recognizer];
+    [self.view addGestureRecognizer:recognizer];
+}
 
-    // Add a small-threshold right-edge gesture to toggle OSC visibility
-    _rightEdgeToggleOscRecognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(handleRightEdgeToggle:)];
-    _rightEdgeToggleOscRecognizer.edges = UIRectEdgeRight;
+// Quick actions (the OSC toggle, and keyboard / editor / command when bound to
+// an edge): a short ~15pt slide, split over two recognizers by what sits under
+// the finger — see gestureRecognizer:shouldReceiveTouch:.
+- (void)configShortEdgeGesture:(UIRectEdge)edge action:(StreamGestureAction)action {
     CGFloat smallThreshold = 15.0f / self.view.frame.size.width; // ~15pt swipe distance
-    _rightEdgeToggleOscRecognizer.normalizedThresholdDistance = smallThreshold;
-    _rightEdgeToggleOscRecognizer.delaysTouchesBegan = NO;
-    _rightEdgeToggleOscRecognizer.delaysTouchesEnded = NO;
-    _rightEdgeToggleOscRecognizer.cancelsTouchesInView = NO;
-    // Finger-only: pencil never toggles the OSC, and — since shouldReceiveTouch is
-    // what arms the right-edge gesture suppression — pencil touches near the right
-    // edge can no longer freeze OSC/stream input either.
-    _rightEdgeToggleOscRecognizer.allowedTouchTypes = @[@(UITouchTypeDirect)];
-    _rightEdgeToggleOscRecognizer.delegate = self;
-    _rightEdgeToggleOscRecognizer.edgeDelegate = self;
-    // Right edge small gesture is standalone now; no dependency on Command Manager gesture
-    [self.view addGestureRecognizer:_rightEdgeToggleOscRecognizer];
 
-    // Second right-edge recognizer for touches that land ON a tap-style OSC control
+    CustomEdgeSlideGestureRecognizer *passive = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(handleShortEdgeGesture:)];
+    passive.edges = edge;
+    passive.normalizedThresholdDistance = smallThreshold;
+    passive.delaysTouchesBegan = NO;
+    passive.delaysTouchesEnded = NO;
+    passive.cancelsTouchesInView = NO;
+    // Finger-only: pencil never toggles the OSC, and — since shouldReceiveTouch is
+    // what arms the edge gesture suppression — pencil touches near the edge can no
+    // longer freeze OSC/stream input either.
+    passive.allowedTouchTypes = @[@(UITouchTypeDirect)];
+    passive.delegate = self;
+    passive.edgeDelegate = self;
+    [_edgeGestureActions setObject:@(action) forKey:passive];
+    [_shortEdgePassiveRecognizers addObject:passive];
+    [self.view addGestureRecognizer:passive];
+
+    // Second recognizer for touches that land ON a tap-style OSC control
     // (button widgets, legacy A/B/X/Y/L*/R*/start/select layers) inside the edge
     // strip. The passive recognizer above can't take those: it never cancels the
-    // view's touches, so a swipe starting on R2 would both press R2 and toggle the
-    // OSC. This one uses UIKit's delaysTouchesBegan — the control's touchesBegan is
-    // withheld until the recognizer decides — and decides fast (see
+    // view's touches, so a swipe starting on R2 would both press R2 and fire the
+    // gesture. This one uses UIKit's delaysTouchesBegan — the control's touchesBegan
+    // is withheld until the recognizer decides — and decides fast (see
     // CustomEdgeSlideGestureRecognizer.earlyDecision): a finger that starts sliding
     // inward at once is the edge gesture and the control never sees it; a finger
     // that rests, taps, or moves vertically hands the control its normal touch
     // sequence ~70ms late at most. Tap → control, drag → gesture, never both.
-    _rightEdgeOverControlRecognizer = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(handleRightEdgeToggle:)];
-    _rightEdgeOverControlRecognizer.edges = UIRectEdgeRight;
-    _rightEdgeOverControlRecognizer.normalizedThresholdDistance = smallThreshold;
-    _rightEdgeOverControlRecognizer.earlyDecision = YES;
-    _rightEdgeOverControlRecognizer.delaysTouchesBegan = YES;
-    _rightEdgeOverControlRecognizer.delaysTouchesEnded = NO;
-    _rightEdgeOverControlRecognizer.cancelsTouchesInView = YES;
-    _rightEdgeOverControlRecognizer.allowedTouchTypes = @[@(UITouchTypeDirect)];
-    _rightEdgeOverControlRecognizer.delegate = self;
-    _rightEdgeOverControlRecognizer.edgeDelegate = self;
-    [self.view addGestureRecognizer:_rightEdgeOverControlRecognizer];
-    
-    if([self isOscLayoutToolEnabled]){
-        _oscLayoutTapRecoginizer = [[CustomTapGestureRecognizer alloc] initWithTarget:self action:@selector(handleWidgetLayoutGesture)];
-        _oscLayoutTapRecoginizer.numberOfTouchesRequired = _settings.oscLayoutToolFingers.intValue; //tap a predefined number of fingers to open osc layout tool
-        _oscLayoutTapRecoginizer.tapDownTimeThreshold = 0.2;
-        _oscLayoutTapRecoginizer.countsWithheldTouches = true;   // must open the editor even while the OSC touch block eats the fingers
-        _oscLayoutTapRecoginizer.delaysTouchesBegan = NO;
-        _oscLayoutTapRecoginizer.delaysTouchesEnded = NO;
-        if(_settings.touchMode.intValue == AbsoluteTouch) _oscLayoutTapRecoginizer.immediateTriggering = true; // make immediate triggering on for absolute touch mode
-        [self.view addGestureRecognizer:_oscLayoutTapRecoginizer]; //
+    CustomEdgeSlideGestureRecognizer *overControl = [[CustomEdgeSlideGestureRecognizer alloc] initWithTarget:self action:@selector(handleShortEdgeGesture:)];
+    overControl.edges = edge;
+    overControl.normalizedThresholdDistance = smallThreshold;
+    overControl.earlyDecision = YES;
+    overControl.delaysTouchesBegan = YES;
+    overControl.delaysTouchesEnded = NO;
+    overControl.cancelsTouchesInView = YES;
+    overControl.allowedTouchTypes = @[@(UITouchTypeDirect)];
+    overControl.delegate = self;
+    overControl.edgeDelegate = self;
+    [_edgeGestureActions setObject:@(action) forKey:overControl];
+    [_shortEdgeOverControlRecognizers addObject:overControl];
+    [self.view addGestureRecognizer:overControl];
+}
+
+- (void)handleSheetEdgeGesture:(UIGestureRecognizer *)recognizer {
+    NSNumber *action = [_edgeGestureActions objectForKey:recognizer];
+    if (action) [self performStreamGestureAction:action.integerValue fromHold:nil];
+}
+
+- (void)handleShortEdgeGesture:(UIGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateEnded) return;
+    NSNumber *action = [_edgeGestureActions objectForKey:recognizer];
+    if (action) [self performStreamGestureAction:action.integerValue fromHold:nil];
+}
+
+- (BOOL)holdGestureEnabledForFingers:(NSInteger)fingers {
+    StreamGestureAction action = [StreamGestureBindings actionForTrigger:[StreamGestureBindings holdTriggerForFingerCount:fingers]];
+    if (action == StreamGestureActionNone) return NO;
+    // Not while the layout editor, the settings sidebar, the toolbox or the
+    // quick menu is up.
+    if (_streamView.widgetToolOpened) return NO;
+    if (self.presentedViewController != nil) return NO;
+    if ([self quickMenu_isOpen]) return NO;
+    if (self.revealViewController && self.revealViewController.frontViewPosition != FrontViewPositionLeft) return NO;
+    if (action == StreamGestureActionLayoutEditor && ![self isOscLayoutToolEnabled]) return NO;
+    if (action == StreamGestureActionGestureCommand && [StreamGestureBindings commandString].length == 0) return NO;
+    return YES;
+}
+
+- (void)handleHoldGesture:(MultiFingerHoldGestureRecognizer *)recognizer {
+    StreamGestureAction action = [StreamGestureBindings actionForTrigger:[StreamGestureBindings holdTriggerForFingerCount:recognizer.recognizedFingerCount]];
+    if (action == StreamGestureActionNone) return;
+    [self performStreamGestureAction:action fromHold:recognizer];
+}
+
+// Single dispatch point for every stream gesture binding.
+- (void)performStreamGestureAction:(StreamGestureAction)action fromHold:(MultiFingerHoldGestureRecognizer *)hold {
+    switch (action) {
+        case StreamGestureActionSettings:
+            [self expandSettingsView];
+            break;
+        case StreamGestureActionToolbox:
+            if (self.presentedViewController == nil && !_streamView.widgetToolOpened) [self presentToolboxViewController];
+            break;
+        case StreamGestureActionSoftKeyboard:
+            if (_streamView.widgetToolOpened) break;
+            // An edge swipe has no finger over the picture: keep its middle visible.
+            [_streamView toggleKeyboardFromTouchPointHeight:hold ? hold.lowestTouchPointHeight : CGRectGetHeight(self.view.bounds) * 0.5];
+            break;
+        case StreamGestureActionLayoutEditor:
+            if (![self isOscLayoutToolEnabled] || _streamView.widgetToolOpened || self.presentedViewController != nil) break;
+            [self handleWidgetLayoutGesture];
+            break;
+        case StreamGestureActionToggleOsc:
+            [self toggleOscVisibility];
+            break;
+        case StreamGestureActionGestureCommand:
+            [self performGestureCommand];
+            break;
+        default:
+            break;
     }
-    
+}
+
+// The gesture command: toolbox built-ins are performed by the stream (as the
+// quick menu does); everything else goes out as a one-shot press like the
+// fullscreen widget's double tap.
+- (void)performGestureCommand {
+    if (_streamView.widgetToolOpened) return;
+    NSString *cmd = [StreamGestureBindings commandString];
+    if (cmd.length == 0) return;
+    if ([cmd.uppercaseString isEqualToString:CommandManager.softKeyboardCommand]) {
+        [self toggleSoftKeyboard];
+        return;
+    }
+    if ([cmd.uppercaseString isEqualToString:CommandManager.audioOutputCommand]) {
+        [self cycleAudioOutput];
+        return;
+    }
+    [_streamView sendOneShotCommand:cmd];
 }
 
 - (void)configZoomGestureAndAddStreamView{
@@ -2895,7 +3010,7 @@ static const NSTimeInterval kAudioLeaveGameHold = 1.0;
     [self osc_applyPresentation];
 }
 
-// Right-edge swipe.
+// Gesture-table action "Show/Hide On-Screen Controls" (right edge by default).
 - (void)toggleOscVisibility {
     // Avoid interference when widget layout tool is open
     if (self->_streamView.widgetToolOpened) return;
@@ -3455,8 +3570,9 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     // 初始化倒计时秒数
     __block NSInteger remainingSeconds = 16;
 
-    NSString* settingsEdgeSide = _settings.slideToSettingsScreenEdge.intValue == UIRectEdgeLeft ? [LocalizationHelper localizedStringForKey:@"left"] : [LocalizationHelper localizedStringForKey:@"right"];
-    NSString* cmdToolEdgeSide = _settings.slideToSettingsScreenEdge.intValue == UIRectEdgeLeft ? [LocalizationHelper localizedStringForKey:@"right"] : [LocalizationHelper localizedStringForKey:@"left"];
+    BOOL settingsOnRight = [StreamGestureBindings triggerForAction:StreamGestureActionSettings] == StreamGestureTriggerRightEdge;
+    NSString* settingsEdgeSide = !settingsOnRight ? [LocalizationHelper localizedStringForKey:@"left"] : [LocalizationHelper localizedStringForKey:@"right"];
+    NSString* cmdToolEdgeSide = !settingsOnRight ? [LocalizationHelper localizedStringForKey:@"right"] : [LocalizationHelper localizedStringForKey:@"left"];
     uint8_t slideDist = (uint8_t)(_settings.slideToSettingsDistance.floatValue * 100);
     // 创建弹窗
     
@@ -3608,7 +3724,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 
 #else
     //[self configSwipeGestures]; // swipe & exit gesture configured here
-    //[self configOscLayoutTool]; //_oscLayoutTapRecoginizer will be added or removed to the view here
+    //[self configOscLayoutTool];
 #endif
     
     _tipLabel = [[UILabel alloc] init];
@@ -4621,17 +4737,9 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     _dummyEventLink = nil;
 }
 
-- (void)edgeSwiped{
-    /*
-    if([self->_mainFrameViewcontroller isIPhonePortrait]){ // disable backmenu for iphone portrait mode;
-        [self returnToMainFrame]; //directly quit the session
-        return;
-    } */
-    [self expandSettingsView];  // expand settings view in other cases;
-}
-
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    if (gestureRecognizer == _rightEdgeToggleOscRecognizer || gestureRecognizer == _rightEdgeOverControlRecognizer) {
+    BOOL isOverControl = [_shortEdgeOverControlRecognizers containsObject:gestureRecognizer];
+    if (isOverControl || [_shortEdgePassiveRecognizers containsObject:gestureRecognizer]) {
         CustomEdgeSlideGestureRecognizer *edgeRecognizer = (CustomEdgeSlideGestureRecognizer *)gestureRecognizer;
         CGPoint location = [touch locationInView:gestureRecognizer.view];
         CGRect bounds = gestureRecognizer.view.bounds;
@@ -4692,7 +4800,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         if (onDragControl) {
             return NO;
         }
-        if (gestureRecognizer == _rightEdgeOverControlRecognizer) {
+        if (isOverControl) {
             // Never withhold touches while the layout tool is open: dragging a
             // widget from the edge is the editor's primary interaction, and the
             // toggle is a no-op there anyway (toggleOscVisibility bails).
@@ -4708,12 +4816,6 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 
 - (void)edgeSlideGesture:(CustomEdgeSlideGestureRecognizer *)recognizer didFinishWithSuccess:(BOOL)success {
     [self->_streamView endRightEdgeGestureSuppression];
-}
-
-- (void)handleRightEdgeToggle:(CustomEdgeSlideGestureRecognizer *)recognizer {
-    if (recognizer.state == UIGestureRecognizerStateEnded) {
-        [self toggleOscVisibility];
-    }
 }
 
 - (void)disconnectRemoteSession {

@@ -25,6 +25,7 @@
 #import "LocalizationHelper.h"
 #import "StreamView.h"
 #import "GameAspectMemory.h"
+#import "StreamGestureBindings.h"
 
 @implementation SettingsViewController {
     UISwitch *_streamTouchBlockSwitch;
@@ -35,7 +36,6 @@
     NSInteger _bitrate;
     NSInteger _lastSelectedResolutionIndex;
     bool justEnteredSettingsView;
-    uint16_t oswLayoutFingers;
     CustomEdgeSlideGestureRecognizer *slideToCloseSettingsViewRecognizer;
     NSMutableDictionary *_settingStackDict;
     NSMutableArray *_favoriteSettingStackIdentifiers;
@@ -54,6 +54,12 @@
     UIStackView *_physicalControllerComboStack;
     UILabel *_physicalControllerComboSummaryLabel;
     UIButton *_physicalControllerComboConfigureButton;
+    // Gesture table (StreamGestureBindings), rebuilt by layoutSections.
+    MenuSectionView *_gesturesSection;
+    NSMutableDictionary<NSNumber *, UIStackView *> *_gestureRowStacks;   // action -> row
+    NSMutableDictionary<NSNumber *, UIButton *> *_gestureTriggerButtons; // action -> trigger menu button
+    UIStackView *_gestureCommandTargetStack;
+    UIButton *_gestureCommandTargetButton;
 }
 
 @dynamic overrideUserInterfaceStyle;
@@ -749,6 +755,218 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 
+#pragma mark - Gesture table
+
+- (NSString *)gestureRowIdentifierForAction:(StreamGestureAction)action {
+    switch (action) {
+        case StreamGestureActionSettings: return @"gestureOpenSettingsStack";
+        case StreamGestureActionToolbox: return @"gestureOpenToolboxStack";
+        case StreamGestureActionSoftKeyboard: return @"gestureSoftKeyboardStack";
+        case StreamGestureActionLayoutEditor: return @"gestureLayoutEditorStack";
+        case StreamGestureActionToggleOsc: return @"gestureToggleOscStack";
+        case StreamGestureActionGestureCommand: return @"gestureCommandStack";
+        default: return @"";
+    }
+}
+
+- (UILabel *)gestureRowLabelWithText:(NSString *)text {
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.text = text;
+    label.font = [UIFont systemFontOfSize:18];
+    label.textColor = [UIColor whiteColor];
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.65;
+    label.numberOfLines = 1;
+    [label setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [label setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    return label;
+}
+
+- (UIButton *)gestureRowButtonWithSymbol:(NSString *)symbolName {
+    UIButtonConfiguration *config = [UIButtonConfiguration plainButtonConfiguration];
+    config.image = [UIImage systemImageNamed:symbolName
+                           withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold]];
+    config.imagePlacement = NSDirectionalRectEdgeTrailing;
+    config.imagePadding = 6;
+    config.baseForegroundColor = [UIColor systemBlueColor];
+    config.contentInsets = NSDirectionalEdgeInsetsMake(8, 8, 8, 0);
+    config.titleLineBreakMode = NSLineBreakByTruncatingTail;
+    UIButton *button = [UIButton buttonWithConfiguration:config primaryAction:nil];
+    [button setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [button setContentCompressionResistancePriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
+    return button;
+}
+
+- (void)setTitle:(NSString *)title forGestureButton:(UIButton *)button {
+    UIButtonConfiguration *config = button.configuration;
+    config.attributedTitle = [[NSAttributedString alloc] initWithString:title ?: @""
+                                                             attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:17]}];
+    button.configuration = config;
+}
+
+- (UIStackView *)gestureRowWithLabel:(UILabel *)label button:(UIButton *)button indented:(BOOL)indented {
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[label, button]];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.alignment = UIStackViewAlignmentCenter;
+    row.distribution = UIStackViewDistributionFill;
+    row.spacing = 12;
+    row.layer.cornerRadius = 8;
+    if (indented) {
+        row.layoutMargins = UIEdgeInsetsMake(0, 16, 0, 0);
+        row.layoutMarginsRelativeArrangement = YES;
+    }
+    [row.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+    return row;
+}
+
+// Builds one row per StreamGestureAction plus the indented "Command" row.
+// layoutSections runs again on every Favorite/All switch, so the rows are
+// rebuilt each time from the stored table.
+- (void)installStreamGestureRows {
+    _gestureRowStacks = [NSMutableDictionary dictionary];
+    _gestureTriggerButtons = [NSMutableDictionary dictionary];
+    for (NSNumber *action in [StreamGestureBindings allActions]) {
+        UILabel *label = [self gestureRowLabelWithText:[StreamGestureBindings localizedTitleForAction:action.integerValue]];
+        UIButton *button = [self gestureRowButtonWithSymbol:@"chevron.up.chevron.down"];
+        button.showsMenuAsPrimaryAction = YES;
+        _gestureTriggerButtons[action] = button;
+        _gestureRowStacks[action] = [self gestureRowWithLabel:label button:button indented:NO];
+    }
+    UILabel *commandLabel = [self gestureRowLabelWithText:[LocalizationHelper localizedStringForKey:@"Gesture Command Target"]];
+    _gestureCommandTargetButton = [self gestureRowButtonWithSymbol:@"chevron.right"];
+    [_gestureCommandTargetButton addTarget:self action:@selector(gestureCommandTargetTapped:) forControlEvents:UIControlEventTouchUpInside];
+    _gestureCommandTargetStack = [self gestureRowWithLabel:commandLabel button:_gestureCommandTargetButton indented:YES];
+}
+
+- (UIMenu *)gestureTriggerMenuForAction:(StreamGestureAction)action {
+    StreamGestureTrigger current = [StreamGestureBindings triggerForAction:action];
+    StreamGestureTrigger settingsTrigger = [StreamGestureBindings triggerForAction:StreamGestureActionSettings];
+    NSMutableArray<UIMenuElement *> *items = [NSMutableArray array];
+    __weak typeof(self) weakSelf = self;
+    for (NSNumber *triggerNumber in [StreamGestureBindings allTriggers]) {
+        StreamGestureTrigger trigger = triggerNumber.integerValue;
+        if (action == StreamGestureActionSettings && trigger == StreamGestureTriggerNone) continue; // Settings is never off
+        UIAction *item = [UIAction actionWithTitle:[StreamGestureBindings localizedTitleForTrigger:trigger]
+                                             image:nil
+                                        identifier:nil
+                                           handler:^(__kindof UIAction * _Nonnull menuAction) {
+            [weakSelf gestureTrigger:trigger chosenForAction:action];
+        }];
+        item.state = trigger == current ? UIMenuElementStateOn : UIMenuElementStateOff;
+        // Settings' trigger can't be taken by another row.
+        if (action != StreamGestureActionSettings && trigger != StreamGestureTriggerNone && trigger == settingsTrigger) {
+            item.attributes = UIMenuElementAttributesDisabled;
+        }
+        [items addObject:item];
+    }
+    return [UIMenu menuWithTitle:@"" children:items];
+}
+
+- (void)refreshStreamGestureRows {
+    for (NSNumber *action in [StreamGestureBindings allActions]) {
+        UIButton *button = _gestureTriggerButtons[action];
+        if (!button) continue;
+        [self setTitle:[StreamGestureBindings localizedTitleForTrigger:[StreamGestureBindings triggerForAction:action.integerValue]] forGestureButton:button];
+        button.menu = [self gestureTriggerMenuForAction:action.integerValue];
+    }
+    NSString *commandName = [StreamGestureBindings commandString].length > 0 ? [StreamGestureBindings commandDisplayName]
+                                                                            : [LocalizationHelper localizedStringForKey:@"Not Set"];
+    [self setTitle:commandName forGestureButton:_gestureCommandTargetButton];
+
+    BOOL commandBound = [StreamGestureBindings triggerForAction:StreamGestureActionGestureCommand] != StreamGestureTriggerNone;
+    if (_gestureCommandTargetStack) [self setHidden:!commandBound forStack:_gestureCommandTargetStack];
+    BOOL sheetOnEdge = [StreamGestureBindings isEdgeTrigger:[StreamGestureBindings triggerForAction:StreamGestureActionSettings]]
+                    || [StreamGestureBindings isEdgeTrigger:[StreamGestureBindings triggerForAction:StreamGestureActionToolbox]];
+    if (self.slideToSettingsDistanceStack) [self setHidden:!sheetOnEdge forStack:self.slideToSettingsDistanceStack];
+    if (currentSettingsMenuMode == AllSettings && _gesturesSection.superview != nil) [_gesturesSection updateViewForFoldState];
+}
+
+- (void)gestureTrigger:(StreamGestureTrigger)trigger chosenForAction:(StreamGestureAction)action {
+    StreamGestureAction swapped = [StreamGestureBindings assignTrigger:trigger toAction:action];
+    [self refreshStreamGestureRows];
+    if (swapped != StreamGestureActionNone) [self flashGestureRowForAction:swapped];
+    if (action == StreamGestureActionGestureCommand && trigger != StreamGestureTriggerNone
+        && [StreamGestureBindings commandString].length == 0) {
+        [self gestureCommandTargetTapped:_gestureCommandTargetButton];
+    }
+}
+
+// The row that took over the old trigger blinks once (no toast).
+- (void)flashGestureRowForAction:(StreamGestureAction)action {
+    UIStackView *row = _gestureRowStacks[@(action)];
+    if (!row) return;
+    row.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.15];
+    [UIView animateWithDuration:0.6 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
+        row.backgroundColor = [UIColor clearColor];
+    } completion:nil];
+}
+
+// Command picker: the toolbox's command list (same list the quick menu pins
+// from), plus a custom command typed like the widget editor's Command field.
+- (void)gestureCommandTargetTapped:(UIButton *)sender {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:nil message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    NSString *current = [StreamGestureBindings commandString];
+    for (RemoteCommand *command in [CommandManager.shared getAllCommands]) {
+        NSString *cmdString = command.cmdString;
+        NSString *alias = command.alias.length > 0 ? command.alias : cmdString;
+        NSString *title = [cmdString caseInsensitiveCompare:current] == NSOrderedSame ? [NSString stringWithFormat:@"✓ %@", alias] : alias;
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [StreamGestureBindings setCommandString:cmdString displayName:alias];
+            [self refreshStreamGestureRows];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Custom Command…"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self presentCustomGestureCommandEditor];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    UIView *anchor = sender ?: _gestureCommandTargetStack;
+    sheet.popoverPresentationController.sourceView = anchor;
+    sheet.popoverPresentationController.sourceRect = anchor.bounds;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+// Same grammar the gesture command can fire as a one-shot press (see
+// OnScreenWidgetView.sendOneShotCommand): keyboard combos, combo tokens with
+// '-' / '*' / interval, single keyboard / mouse / controller buttons.
+- (BOOL)isValidGestureCommand:(NSString *)cmdString {
+    if (cmdString.length == 0) return NO;
+    if ([CommandManager.shared extractKeyStringsFromComboCommandFrom:cmdString] != nil) return YES;
+    if ([CommandManager.shared extractSinglCmdStringsFromComboKeysFrom:[CommandManager.shared comboStringStrippingTapMarkers:cmdString]] != nil) return YES;
+    if ([CommandManager.mouseButtonMappings.allKeys containsObject:cmdString]) return YES;
+    if ([CommandManager.oscButtonMappings.allKeys containsObject:cmdString]) return YES;
+    return NO;
+}
+
+- (void)presentCustomGestureCommandEditor {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Custom Command…"]
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    NSString *current = [StreamGestureBindings commandString];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = [LocalizationHelper localizedStringForKey:@"Gesture Command Target"];
+        textField.keyboardType = UIKeyboardTypeASCIICapable;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        textField.spellCheckingType = UITextSpellCheckingTypeNo;
+        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        textField.text = current.lowercaseString;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *cmdString = [[alert.textFields.firstObject.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString];
+        if (![self isValidGestureCommand:cmdString]) {
+            UIAlertController *invalid = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Invalid Command"]
+                                                                             message:nil
+                                                                      preferredStyle:UIAlertControllerStyleAlert];
+            [invalid addAction:[UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"] style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:invalid animated:YES completion:nil];
+            return;
+        }
+        [StreamGestureBindings setCommandString:cmdString displayName:cmdString];
+        [self refreshStreamGestureRows];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)streamTouchBlockSwitchFlipped:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:StreamViewBlockStreamTouchDefaultsKey];
 }
@@ -1031,11 +1249,17 @@ BOOL isCustomResolution(int resolutionSelected) {
     if (@available(iOS 13.0, *)) {
         [gesturesSection setSectionWithIcon:[UIImage systemImageNamed:@"hand.draw"] andSize:23];
     }
-    
-    [self addSetting:self.softKeyboardGestureStack ofId:@"softKeyboardGestureStack" withInfoTag:YES withDynamicLabel:NO to:gesturesSection];
-    [self addSetting:self.slideToSettingsScreenEdgeStack ofId:@"slideToSettingsScreenEdgeStack" withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
-    [self addSetting:self.slideToToolboxScreenEdgeStack ofId:@"slideToToolboxScreenEdgeStack" withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
+    _gesturesSection = gesturesSection;
+    [self installStreamGestureRows];
+    for (NSNumber *action in [StreamGestureBindings allActions]) {
+        [self addSetting:_gestureRowStacks[action] ofId:[self gestureRowIdentifierForAction:action.integerValue] withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
+        if (action.integerValue == StreamGestureActionGestureCommand) {
+            [self addSetting:_gestureCommandTargetStack ofId:@"gestureCommandTargetStack" withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
+        }
+    }
+    self.slideToSettingsDistanceUILabel.text = [LocalizationHelper localizedStringForKey:@"Edge Swipe Distance"];
     [self addSetting:self.slideToSettingsDistanceStack ofId:@"slideToSettingsDistanceStack" withInfoTag:YES withDynamicLabel:YES to:gesturesSection];
+    [self refreshStreamGestureRows];
     [gesturesSection addToParentStack:_parentStack];
     [gesturesSection setExpanded:YES];
 
@@ -1494,11 +1718,6 @@ BOOL isCustomResolution(int resolutionSelected) {
         tipText = [LocalizationHelper localizedStringForKey:@"pipStackTip"];
         showOnlineDocAction = false;
     }
-    if([sender.superview.accessibilityIdentifier isEqualToString: @"softKeyboardGestureStack" ]){
-        tipText = [LocalizationHelper localizedStringForKey:@"softKeyboardGestureStackTip"];
-        showOnlineDocAction = true;
-        onlineDocLink = [LocalizationHelper localizedStringForKey:@"softKeyboardGestureStackDoc"];
-    }
     if([sender.superview.accessibilityIdentifier isEqualToString: @"slideToSettingsDistanceStack" ]){
         tipText = [LocalizationHelper localizedStringForKey:@"slideToSettingsDistanceStackTip"];
         showOnlineDocAction = false;
@@ -1727,7 +1946,19 @@ BOOL isCustomResolution(int resolutionSelected) {
     NSArray *savedArray = [[NSUserDefaults standardUserDefaults] objectForKey:@"FavoriteSettingStackIdentifiers"];
         
     if ([savedArray isKindOfClass:[NSArray class]]) {
-        _favoriteSettingStackIdentifiers = [savedArray mutableCopy];
+        // The old gesture rows were replaced by the gesture table; carry their
+        // favorites over to the matching new rows.
+        NSDictionary<NSString *, NSString *> *renamed = @{
+            @"softKeyboardGestureStack": @"gestureSoftKeyboardStack",
+            @"slideToSettingsScreenEdgeStack": @"gestureOpenSettingsStack",
+            @"slideToToolboxScreenEdgeStack": @"gestureOpenToolboxStack",
+        };
+        _favoriteSettingStackIdentifiers = [NSMutableArray array];
+        for (id item in savedArray) {
+            if (![item isKindOfClass:[NSString class]]) continue;
+            NSString *identifier = renamed[item] ?: item;
+            if (![_favoriteSettingStackIdentifiers containsObject:identifier]) [_favoriteSettingStackIdentifiers addObject:identifier];
+        }
     } else {
         _favoriteSettingStackIdentifiers = [NSMutableArray array];
         [_favoriteSettingStackIdentifiers addObject:@"resolutionStack"];
@@ -1745,9 +1976,9 @@ BOOL isCustomResolution(int resolutionSelected) {
         [_favoriteSettingStackIdentifiers addObject:@"pipStack"];
         [_favoriteSettingStackIdentifiers addObject:@"backgroundSessionTimerStack"];
         [_favoriteSettingStackIdentifiers addObject:@"statsOverlayStack"];
-        [_favoriteSettingStackIdentifiers addObject:@"softKeyboardGestureStack"];
-        [_favoriteSettingStackIdentifiers addObject:@"slideToSettingsScreenEdgeStack"];
-        [_favoriteSettingStackIdentifiers addObject:@"slideToToolboxScreenEdgeStack"];
+        [_favoriteSettingStackIdentifiers addObject:@"gestureOpenSettingsStack"];
+        [_favoriteSettingStackIdentifiers addObject:@"gestureOpenToolboxStack"];
+        [_favoriteSettingStackIdentifiers addObject:@"gestureSoftKeyboardStack"];
         [_favoriteSettingStackIdentifiers addObject:@"slideToSettingsDistanceStack"];
         [_favoriteSettingStackIdentifiers addObject:@"unlockDisplayOrientationStack"];
     }
@@ -2027,13 +2258,7 @@ BOOL isCustomResolution(int resolutionSelected) {
     // reverse mouse wheel direction setting
     [self.reverseMouseWheelDirectionSelector setSelectedSegmentIndex:currentSettings.reverseMouseWheelDirection ? 1 : 0];// Load old setting
 
-    //  slide to menu settings
-    [self.slideToSettingsScreenEdgeSelector setSelectedSegmentIndex:[self getSelectorIndexFromScreenEdge:(uint32_t)currentSettings.slideToSettingsScreenEdge.integerValue]];
-    // Load old setting
-    [self.slideToToolboxScreenEdgeSelector setEnabled:false];
-    [self.slideToSettingsScreenEdgeSelector addTarget:self action:@selector(slideToSettingsScreenEdgeChanged) forControlEvents:UIControlEventValueChanged];
-    [self slideToSettingsScreenEdgeChanged];
-
+    //  edge swipe distance (settings / toolbox edge gestures)
     [self.slideToMenuDistanceSlider setValue:currentSettings.slideToSettingsDistance.floatValue];
     [self.slideToMenuDistanceSlider addTarget:self action:@selector(slideToMenuDistanceSliderMoved:) forControlEvents:(UIControlEventValueChanged)]; // Update label display when slider is being moved.
     [self slideToMenuDistanceSliderMoved:self.slideToMenuDistanceSlider];
@@ -2060,15 +2285,6 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self.mousePointerVelocityFactorSlider setValue:[self map_SliderValue_fromVelocFactor: currentSettings.mousePointerVelocityFactor.floatValue] animated:YES]; // Load old setting.
     [self.mousePointerVelocityFactorSlider addTarget:self action:@selector(mousePointerVelocityFactorSliderMoved:) forControlEvents:(UIControlEventValueChanged)]; // Update label display when slider is being moved.
     [self mousePointerVelocityFactorSliderMoved:self.mousePointerVelocityFactorSlider];
-
-
-    // these settings will be affected by onscreenControl & touchMode, must be loaded before them.
-    // NSLog(@"osc tool fingers setting test: %d", currentSettings.oscLayoutToolFingers.intValue);
-    self->oswLayoutFingers = (uint16_t)currentSettings.oscLayoutToolFingers.intValue; // load old setting of oscLayoutFingers
-    uint8_t keyboardToggleFingers = currentSettings.keyboardToggleFingers.intValue;
-
-    [self.softKeyboardGestureSelector setSelectedSegmentIndex:keyboardToggleFingers>=5 ? 3 : keyboardToggleFingers-3];
-
 
 
     // this setting will be affected by touchMode, must be loaded before them.
@@ -2101,50 +2317,12 @@ BOOL isCustomResolution(int resolutionSelected) {
     justEnteredSettingsView = false;
 }
 
-- (void)slideToSettingsScreenEdgeChanged{
-    if([self.slideToSettingsScreenEdgeSelector selectedSegmentIndex] == 0) [self.slideToToolboxScreenEdgeSelector setSelectedSegmentIndex:1];
-    else [self.slideToToolboxScreenEdgeSelector setSelectedSegmentIndex:0];
-}
-
+// Choosing Custom OSC outside a stream goes straight to the layout editor
+// (in a stream the gesture table's layout editor gesture opens it).
 - (void)showCustomOswTip {
-    NSString* edgeSide = self.slideToSettingsScreenEdgeSelector.selectedSegmentIndex == 1 ? [LocalizationHelper localizedStringForKey:@"left"] : [LocalizationHelper localizedStringForKey:@"right"];
-    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:[LocalizationHelper localizedStringForKey:@"Rebase in Streaming"]
-                                                                             message:[LocalizationHelper localizedStringForKey:@"Open widget tool in streaming by:\nSliding from %@ screen edge to open cmd tool.\nOr tap %d fingers on stream view, number of fingers required:", edgeSide, self->oswLayoutFingers]
-                                                                      preferredStyle:UIAlertControllerStyleAlert];
-    
-    [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.placeholder = [LocalizationHelper localizedStringForKey:@"%d", self->oswLayoutFingers];
-        textField.keyboardType = UIKeyboardTypeNumberPad;
-    }];
-    
-    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"Cancel"]
-                                                           style:UIAlertActionStyleDefault
-                                                         handler:nil];
-    
-    UIAlertAction *okAction = [UIAlertAction actionWithTitle:[LocalizationHelper localizedStringForKey:@"OK"]
-                                                       style:UIAlertActionStyleDefault
-                                                     handler:^(UIAlertAction *action) {
-         UITextField *textField = alertController.textFields.firstObject;
-         NSString *inputText = textField.text;
-         NSInteger fingers = [inputText integerValue];
-         if (inputText.length > 0 && fingers >= 4) {
-             self->oswLayoutFingers = (uint16_t) fingers;
-             NSLog(@"OK button tapped with %d fingers", (uint16_t)fingers);
-         } else {
-             NSLog(@"OK button tapped with no change");
-         }
-         
-         // Continue execution after the alert is dismissed
-         if (!self->_mainFrameViewController.settingsExpandedInStreamView) {
-             [self invokeOscLayout]; // Don't open osc layout tool immediately during streaming
-         }
-                                                         
-        [self findDynamicLabelFromStack:self.onScreenWidgetStack].text = [self isCustomOswEnabled] ? [LocalizationHelper localizedStringForKey:@"%d finger tap", self->oswLayoutFingers] : @"";
-        [self handleOswGestureChange];}];
-    
-    [alertController addAction:cancelAction];
-    [alertController addAction:okAction];
-    [self presentViewController:alertController animated:YES completion:nil];
+    if (!self->_mainFrameViewController.settingsExpandedInStreamView) {
+        [self invokeOscLayout];
+    }
 }
 
 - (bool)isOswEnabled{
@@ -2157,16 +2335,6 @@ BOOL isCustomResolution(int resolutionSelected) {
 
 - (bool)isNotNativeTouchOnly{
     return (self.enableOswForNativeTouchSwitch.isOn && self.touchModeSelector.selectedSegmentIndex == NativeTouch) || self.touchModeSelector.selectedSegmentIndex == RelativeTouch || self.touchModeSelector.selectedSegmentIndex == AbsoluteTouch;
-}
-
-- (void)handleOswGestureChange{
-    if(justEnteredSettingsView) return;
-    if([self isCustomOswEnabled] && oswLayoutFingers == self.softKeyboardGestureSelector.selectedSegmentIndex + 3 && oswLayoutFingers < 6){
-        [_softKeyboardGestureSelector setSelectedSegmentIndex:_softKeyboardGestureSelector.selectedSegmentIndex-1];
-    }
-    for (NSInteger i = 0; i < _softKeyboardGestureSelector.numberOfSegments; i++) {
-        [_softKeyboardGestureSelector setEnabled:![self isCustomOswEnabled] || i == 3 ? true : i+3 != oswLayoutFingers forSegmentAtIndex:i]; // 或 NO 来禁用
-    }
 }
 
 - (void)renderingBackendChanged:(UISegmentedControl *)sender {
@@ -2278,12 +2446,10 @@ BOOL isCustomResolution(int resolutionSelected) {
     
     bool customOscEnabled = [self isCustomOswEnabled];
     NSLog(@"customOscEnabled %d", customOscEnabled);
+    // The layout editor's trigger lives in the gesture table now.
     UILabel* oswDynamicLabel = [self findDynamicLabelFromStack:self.onScreenWidgetStack];
-    NSString* labelText = customOscEnabled ? [LocalizationHelper localizedStringForKey:@"%d finger tap", self->oswLayoutFingers] : @"";
-    oswDynamicLabel.text = [NSString stringWithFormat:@"  %@  ", labelText];
-    oswDynamicLabel.hidden = !customOscEnabled;
-    NSLog(@"oswDynamicLabel.hidden %d", oswDynamicLabel.hidden);
-    [self handleOswGestureChange];
+    oswDynamicLabel.text = @"";
+    oswDynamicLabel.hidden = YES;
     if(customOscEnabled && !justEnteredSettingsView) {
         // [self.keyboardToggleFingerNumSlider setValue:3.0];
         // [self keyboardToggleFingerNumSliderMoved];
@@ -2618,25 +2784,6 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self findDynamicLabelFromStack:_mousePointerVelocityStack].text = [NSString stringWithFormat:@"  %d%%  ",[self map_velocFactorDisplay_fromSliderValue:sender.value]];
 }
 
-- (uint32_t) getScreenEdgeFromSelector {
-    switch (self.slideToSettingsScreenEdgeSelector.selectedSegmentIndex) {
-        case 0: return UIRectEdgeLeft;
-        case 1: return UIRectEdgeRight;
-        case 2: return UIRectEdgeLeft|UIRectEdgeRight;
-        default: return UIRectEdgeLeft;
-    }
-}
-
-- (uint32_t) getSelectorIndexFromScreenEdge: (uint32_t)edge {
-    switch (edge) {
-        case UIRectEdgeLeft: return 0;
-        case UIRectEdgeRight: return 1;
-        case UIRectEdgeLeft|UIRectEdgeRight: return 2;
-        default: return 0;
-    }
-    return 0;
-}
-
 - (void) widget:(UIView*)widget setEnabled:(bool)enabled{
     if([widget isKindOfClass:[UISlider class]]){
         UISlider* widgetPtr = (UISlider* )widget;
@@ -2678,7 +2825,6 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self setHidden:!(sender.selectedSegmentIndex == RelativeTouch) forStack:self.mousePointerVelocityStack];
     [self setHidden:![self isNotNativeTouchOnly] forStack:self.onScreenWidgetStack];
     [self setHidden:![self isNotNativeTouchOnly] forStack:self.swapAbaxyStack];
-    [self handleOswGestureChange];
 
     [touchAndControlSection updateViewForFoldState];
 }
@@ -2703,7 +2849,6 @@ BOOL isCustomResolution(int resolutionSelected) {
     //self.onScreenWidgetStack.hidden = !sender.isOn;
     [self setHidden:!sender.isOn forStack:_onScreenWidgetStack];
     //[self setHidden:!sender.isOn forStack:_swapAbaxyStack];
-    [self handleOswGestureChange];
     //self.swapAbaxyStack.hidden = !sender.isOn;
     [touchAndControlSection updateViewForFoldState];
 }
@@ -3085,11 +3230,13 @@ BOOL isCustomResolution(int resolutionSelected) {
     NSInteger renderingBackend = [self.renderingBackendSelector selectedSegmentIndex];
     NSInteger framePacingMode = [self.framePacingModeSelector selectedSegmentIndex];
     NSInteger onscreenControls = [self.onScreenWidgetSelector selectedSegmentIndex];
-    NSInteger keyboardToggleFingers = self.softKeyboardGestureSelector.selectedSegmentIndex == 3 ? 20 : self.softKeyboardGestureSelector.selectedSegmentIndex+3;
-    NSInteger oscLayoutToolFingers = (uint16_t)self->oswLayoutFingers;
+    // Legacy gesture fields: the gesture table (StreamGestureBindings, NSUserDefaults)
+    // replaced them; keep whatever is stored so the V1 migration input stays intact.
+    NSInteger keyboardToggleFingers = currentSettings.keyboardToggleFingers.integerValue;
+    NSInteger oscLayoutToolFingers = currentSettings.oscLayoutToolFingers.integerValue;
 
     CGFloat slideToSettingsDistance = self.slideToMenuDistanceSlider.value;
-    uint32_t slideToSettingsScreenEdge = [self getScreenEdgeFromSelector];
+    uint32_t slideToSettingsScreenEdge = (uint32_t)currentSettings.slideToSettingsScreenEdge.integerValue;
     CGFloat pointerVelocityModeDivider = (CGFloat)(uint8_t)self.pointerVelocityModeDividerSlider.value/100;
     CGFloat touchPointerVelocityFactor = (CGFloat)(uint16_t)[self map_velocFactorDisplay_fromSliderValue:self.touchPointerVelocityFactorSlider.value]/100;
     CGFloat mousePointerVelocityFactor = (CGFloat)(uint16_t)[self map_velocFactorDisplay_fromSliderValue:self.mousePointerVelocityFactorSlider.value]/100;

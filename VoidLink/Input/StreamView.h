@@ -143,6 +143,12 @@ typedef NS_ENUM(NSInteger, SnapRatioOverride) {
 
 -(void)readyToBringUpSoftKeyboardByToolbox;
 - (void)toggleKeyboard;
+// Same toggle, lifting the picture so the finger at `lowestTouchPointHeight`
+// (screen height minus its y) stays above the keyboard.
+- (void)toggleKeyboardFromTouchPointHeight:(CGFloat)lowestTouchPointHeight;
+// One-shot press + release of a widget / toolbox command string (the gesture
+// command), through the same path as the fullscreen widget's double tap.
+- (void)sendOneShotCommand:(NSString *)cmdString;
 - (void)keyboardWillShow:(NSNotification *)notification;
 - (void)keyboardWillHide;
 - (void)liftMetalVideoViewIfNeeded:(CGFloat)liftHeight;

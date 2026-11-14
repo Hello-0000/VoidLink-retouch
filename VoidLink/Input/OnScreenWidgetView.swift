@@ -1353,6 +1353,13 @@ import UIKit
             vibrationGenerator.prepare()
             vibrationGenerator.impactOccurred()
         }
+        fireOneShotCommand()
+    }
+
+    // One-shot output of this widget's command: combo tokens down -> 100ms -> up,
+    // or a "+"-style keyboard combo. Shared by the fullscreen trigger's double tap
+    // and the stream gesture command (sendOneShotCommand).
+    private func fireOneShotCommand() {
         let strings = self.comboButtonStrings
         if !strings.isEmpty {
             self.sendComboButtonsDownEvent(comboStrings: strings)
@@ -1365,6 +1372,17 @@ import UIKit
                 CommandManager.shared.sendKeyComboCommand(keyboardCmdStrings: keyboardCmdStrings)
             }
         }
+    }
+
+    // Fires `cmdString` exactly as a fullscreen trigger bound to it would on a
+    // double tap, without any widget in the layout. A headless trigger parses the
+    // string; the async release keeps it alive until the up events are sent.
+    @objc static func sendOneShotCommand(_ cmdString: String, onScreenControls controls: OnScreenControls?) {
+        let command = cmdString.uppercased()
+        guard !command.isEmpty else { return }
+        let trigger = OnScreenWidgetView(cmdString: command, buttonLabel: "", shape: OnScreenWidgetView.FULLSCREEN_SHAPE)
+        if let controls = controls { trigger.onScreenControls = controls }
+        trigger.fireOneShotCommand()
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {

@@ -15,6 +15,8 @@
 		1888C1932E24C41000108730 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1888C1902E24C2C800108730 /* AboutView.swift */; };
 		188973D32E386A670025E48C /* widgetTemplatesIPhone.bin in Resources */ = {isa = PBXBuildFile; fileRef = 188973D22E386A670025E48C /* widgetTemplatesIPhone.bin */; };
 		189AD29A2DE7446000E24B88 /* HostCollectionViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 189AD2992DE7446000E24B88 /* HostCollectionViewController.m */; };
+		9AB2B098E6B74F33809E9196 /* MultiFingerHoldGestureRecognizer.m in Sources */ = {isa = PBXBuildFile; fileRef = 1031AEE3B0C14D15A331484D /* MultiFingerHoldGestureRecognizer.m */; };
+		26A1FF3502A44A7D9BE872C6 /* StreamGestureBindings.m in Sources */ = {isa = PBXBuildFile; fileRef = 2D868D1B2F2C4B8694FB47A8 /* StreamGestureBindings.m */; };
 		840751B32BF49C050096B657 /* CustomTapGestureRecognizer.m in Sources */ = {isa = PBXBuildFile; fileRef = 840751B22BF49C050096B657 /* CustomTapGestureRecognizer.m */; };
 		841BAC922DE35D6B00DA639E /* ThemeManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 841BAC912DE35D6B00DA639E /* ThemeManager.m */; };
 		84203F232C5F24C00032EEED /* OnScreenWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84203F222C5F24C00032EEED /* OnScreenWidgetView.swift */; };
@@ -175,6 +177,10 @@
 		189AD2992DE7446000E24B88 /* HostCollectionViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HostCollectionViewController.m; sourceTree = "<group>"; };
 		18BF141D2E0D7A00009DEE4F /* VoidLink v1.0.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = "VoidLink v1.0.xcdatamodel"; sourceTree = "<group>"; };
 		693B3A9A218638CD00982F7B /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
+		E89CFB855CB54806A3ED6F67 /* MultiFingerHoldGestureRecognizer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MultiFingerHoldGestureRecognizer.h; sourceTree = "<group>"; };
+		1031AEE3B0C14D15A331484D /* MultiFingerHoldGestureRecognizer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MultiFingerHoldGestureRecognizer.m; sourceTree = "<group>"; };
+		3963E3FF5769446F8FA7EAAB /* StreamGestureBindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = StreamGestureBindings.h; sourceTree = "<group>"; };
+		2D868D1B2F2C4B8694FB47A8 /* StreamGestureBindings.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = StreamGestureBindings.m; sourceTree = "<group>"; };
 		840751B12BF49B5A0096B657 /* CustomTapGestureRecognizer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CustomTapGestureRecognizer.h; sourceTree = "<group>"; };
 		840751B22BF49C050096B657 /* CustomTapGestureRecognizer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = CustomTapGestureRecognizer.m; sourceTree = "<group>"; };
 		841BAC8F2DE35BEC00DA639E /* ThemeManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ThemeManager.h; sourceTree = "<group>"; };
@@ -712,6 +718,10 @@
 				9897B6A32212610800966419 /* VoidController.h */,
 				9827E7A22514366900F25707 /* HapticContext.m */,
 				9827E7A7251436EA00F25707 /* HapticContext.h */,
+				E89CFB855CB54806A3ED6F67 /* MultiFingerHoldGestureRecognizer.h */,
+				1031AEE3B0C14D15A331484D /* MultiFingerHoldGestureRecognizer.m */,
+				3963E3FF5769446F8FA7EAAB /* StreamGestureBindings.h */,
+				2D868D1B2F2C4B8694FB47A8 /* StreamGestureBindings.m */,
 				840751B12BF49B5A0096B657 /* CustomTapGestureRecognizer.h */,
 				840751B22BF49C050096B657 /* CustomTapGestureRecognizer.m */,
 				9819CC12254F107A008A7C8E /* RelativeTouchHandler.h */,
@@ -1081,6 +1091,8 @@
 				FB89462D19F646E200339C8A /* MDNSManager.m in Sources */,
 				84351B0F2C29ACCB00A77989 /* OnScreenButtonState.m in Sources */,
 				FB89462B19F646E200339C8A /* StreamView.m in Sources */,
+				9AB2B098E6B74F33809E9196 /* MultiFingerHoldGestureRecognizer.m in Sources */,
+				26A1FF3502A44A7D9BE872C6 /* StreamGestureBindings.m in Sources */,
 				840751B32BF49C050096B657 /* CustomTapGestureRecognizer.m in Sources */,
 				187F4B282E04658A00EECC59 /* WidgetPanelStackView.m in Sources */,
 				A1C0DE012F0000000000A003 /* OSCMultiSelectController.m in Sources */,

@@ -149,8 +149,26 @@
 }
 
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
-    // Treat this as a normal touchesEnded event
-    [self touchesEnded:touches withEvent:event];
+    if(touchPointSpawnedAtUpperScreenEdge) return;
+    // touchesEnded only releases when the ending set covers every stream touch in
+    // the event; a cancel can leave fingers in allTouches that this handler never
+    // owned (a finger on an OSC widget or a legacy OSC CALayer button — those land
+    // on StreamView too — or several fingers cancelled at once by a recognized
+    // multi-finger hold), which would leave the left / right button held on the
+    // host. Decide by the one touch this handler owns: lastTouchDown, the finger
+    // that pressed the left button and armed the long-press timer. Release unless
+    // that finger is still live and not part of this cancel.
+    UITouch *owner = lastTouchDown;
+    if (owner != nil && ![touches containsObject:owner] && [[event allTouches] containsObject:owner]
+        && owner.phase != UITouchPhaseEnded && owner.phase != UITouchPhaseCancelled) {
+        return;
+    }
+    [longPressTimer invalidate];
+    longPressTimer = nil;
+    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+    lastTouchUp = [touches anyObject];
+    lastTouchUpLocation = [lastTouchUp locationInView:streamView];
 }
 
 @end

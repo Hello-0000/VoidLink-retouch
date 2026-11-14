@@ -53,7 +53,24 @@
             @"LockToCurrentOrientation": @"锁定为当前方向布局",
             @"UnlockOrientation": @"解除锁定",
             @"LockOrientationHelpTitle": @"方向锁定说明",
-            @"LockOrientationHelpMessage": @"点击后会把此布局锁定到当前屏幕方向。横屏和竖屏可各自锁定不同布局，旋转时系统会自动切换。"
+            @"LockOrientationHelpMessage": @"点击后会把此布局锁定到当前屏幕方向。横屏和竖屏可各自锁定不同布局，旋转时系统会自动切换。",
+            @"Open Settings": @"打开设置",
+            @"Open Toolbox": @"打开工具箱",
+            @"Soft Keyboard": @"软键盘",
+            @"Layout Editor": @"布局编辑器",
+            @"Show/Hide On-Screen Controls": @"显示/隐藏屏幕控件",
+            @"Gesture Command": @"手势指令",
+            @"Gesture Command Target": @"指令",
+            @"Edge Swipe Distance": @"边缘滑动距离",
+            @"Left Edge Swipe": @"左边缘滑动",
+            @"Right Edge Swipe": @"右边缘滑动",
+            @"3-Finger Hold": @"三指长按",
+            @"4-Finger Hold": @"四指长按",
+            @"5-Finger Hold": @"五指长按",
+            @"Gesture Trigger Off": @"禁用",
+            @"Not Set": @"未设置",
+            @"Custom Command…": @"自定义指令…",
+            @"Invalid Command": @"无效指令"
         };
         enDict = @{
             @"PairingHelpTitle": @"Pairing Help",
@@ -74,7 +91,24 @@
             @"LockToCurrentOrientation": @"Lock to Current Orientation",
             @"UnlockOrientation": @"Unlock Orientation",
             @"LockOrientationHelpTitle": @"Orientation Lock Help",
-            @"LockOrientationHelpMessage": @"Tapping will lock this layout to the current screen orientation. You can lock different layouts for Landscape and Portrait. The system will auto switch when rotating."
+            @"LockOrientationHelpMessage": @"Tapping will lock this layout to the current screen orientation. You can lock different layouts for Landscape and Portrait. The system will auto switch when rotating.",
+            @"Open Settings": @"Open Settings",
+            @"Open Toolbox": @"Open Toolbox",
+            @"Soft Keyboard": @"Soft Keyboard",
+            @"Layout Editor": @"Layout Editor",
+            @"Show/Hide On-Screen Controls": @"Show/Hide On-Screen Controls",
+            @"Gesture Command": @"Gesture Command",
+            @"Gesture Command Target": @"Command",
+            @"Edge Swipe Distance": @"Edge Swipe Distance",
+            @"Left Edge Swipe": @"Left Edge Swipe",
+            @"Right Edge Swipe": @"Right Edge Swipe",
+            @"3-Finger Hold": @"3-Finger Hold",
+            @"4-Finger Hold": @"4-Finger Hold",
+            @"5-Finger Hold": @"5-Finger Hold",
+            @"Gesture Trigger Off": @"Off",
+            @"Not Set": @"Not Set",
+            @"Custom Command…": @"Custom Command…",
+            @"Invalid Command": @"Invalid Command"
         };
     });
     return [prefix isEqualToString:@"zh"] ? zhDict : enDict;

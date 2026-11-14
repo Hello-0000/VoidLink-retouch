@@ -251,6 +251,23 @@ static const float QUICK_TAP_TIME_INTERVAL = 0.2;
     touchPointSpawnedAtUpperScreenEdge = false;
 }
 
+// Cancelled touches (e.g. a recognized multi-finger hold, system interruptions)
+// must not click: just drop the gesture state, and let go of a left button a
+// double-tap drag is holding down.
+- (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
+    if ([touches containsObject:touchLockedForMouseMove]) {
+        if (self->quickTapDetected) {
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+            });
+        }
+        self->quickTapDetected = false;
+        touchLockedForMouseMove = nil;
+        mousePointerMoved = false;
+    }
+    isInMouseWheelScrollingMode = false;
+    touchPointSpawnedAtUpperScreenEdge = false;
+}
 
 - (void)sendMouseMoveEvent:(UITouch* )touch{
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
