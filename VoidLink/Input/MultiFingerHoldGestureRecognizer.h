@@ -31,7 +31,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, assign) NSTimeInterval holdDuration;   // default 1.5s
 @property (nonatomic, assign) NSTimeInterval ringDelay;      // default 0.5s
-@property (nonatomic, assign) CGFloat movementTolerance;     // default 12pt
+@property (nonatomic, assign) CGFloat movementTolerance;     // default 30pt; drifting further restarts the timer
 
 // Valid in the action callback.
 @property (nonatomic, readonly) NSInteger recognizedFingerCount;

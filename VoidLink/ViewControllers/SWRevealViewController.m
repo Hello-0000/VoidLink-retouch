@@ -1000,7 +1000,6 @@ const int FrontViewPositionNone = 0xff;
         UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:23 weight:UIImageSymbolWeightMedium ];
         UIImage *image = [[UIImage systemImageNamed:@"sidebar.left" withConfiguration:config] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         [backButton setImage:image];
-        backButton.imageInsets = UIEdgeInsetsMake(20, 10, 0, 0);
     } else {
         [backButton setTitle:[LocalizationHelper localizedStringForKey:@"Collapse"]];
     }
@@ -1041,7 +1040,6 @@ const int FrontViewPositionNone = 0xff;
         UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:23 weight:UIImageSymbolWeightMedium ];
         UIImage *image = [[UIImage systemImageNamed:@"ellipsis.circle" withConfiguration:config] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         [_moreButton setImage:image];
-        _moreButton.imageInsets = UIEdgeInsetsMake(20, 0, 0, -10);
     } else {
         [_moreButton setTitle:[LocalizationHelper localizedStringForKey:@"Options"]];
     }

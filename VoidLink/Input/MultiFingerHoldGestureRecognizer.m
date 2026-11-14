@@ -86,8 +86,6 @@ static const CGFloat kRingLineWidth = 3.0;
 @implementation MultiFingerHoldGestureRecognizer {
     NSMutableArray<UITouch *> *_tracked;                     // counted fingers, in landing order
     NSMapTable<UITouch *, NSValue *> *_anchors;              // position when the count last changed
-    NSHashTable<UITouch *> *_firedTouches;                   // fingers of the last recognized hold (weak)
-    BOOL _roundInvalid;                                      // a finger moved: wait until every finger lifts
     BOOL _timing;
     NSInteger _timingCount;
     CFTimeInterval _timingStart;
@@ -101,10 +99,9 @@ static const CGFloat kRingLineWidth = 3.0;
     if (self) {
         _holdDuration = 1.5;
         _ringDelay = 0.5;
-        _movementTolerance = 12.0;
+        _movementTolerance = 30.0;
         _tracked = [NSMutableArray array];
         _anchors = [NSMapTable weakToStrongObjectsMapTable];
-        _firedTouches = [NSHashTable weakObjectsHashTable];
         self.allowedTouchTypes = @[@(UITouchTypeDirect)]; // Pencil never takes part
         self.delaysTouchesBegan = NO;
         self.delaysTouchesEnded = NO;
@@ -140,25 +137,17 @@ static const CGFloat kRingLineWidth = 3.0;
     return [[StreamView streamTouchesFrom:[NSSet setWithArray:_tracked] includingWithheld:YES] count];
 }
 
-- (BOOL)firedHoldStillDown:(UIEvent *)event {
-    NSSet<UITouch *> *all = [event allTouches];
-    for (UITouch *touch in _firedTouches.allObjects) {
-        if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled || ![all containsObject:touch]) {
-            [_firedTouches removeObject:touch];
-        }
-    }
-    return _firedTouches.count > 0;
-}
-
 #pragma mark Touches
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    // One recognition per hold: until every finger of the last one has lifted,
-    // new fingers are not tracked.
-    BOOL blocked = [self firedHoldStillDown:event];
+    // One recognition per hold needs no bookkeeping: fingers are only ever
+    // added here, at their began, and after a recognition UIKit resets us and
+    // stops delivering the still-held fingers of that hold. (Remembering the
+    // fired UITouch objects was wrong: UIKit recycles them, so a new finger
+    // could inherit a fired touch and lock every later hold out.)
     BOOL added = NO;
     for (UITouch *touch in touches) {
-        if (blocked || ![self touchCounts:touch]) {
+        if (![self touchCounts:touch]) {
             [self ignoreTouch:touch forEvent:event];
             continue;
         }
@@ -171,7 +160,7 @@ static const CGFloat kRingLineWidth = 3.0;
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    if (!_timing || _roundInvalid) return;
+    if (!_timing) return;
     UIView *host = self.view;
     for (UITouch *touch in touches) {
         NSValue *anchor = [_anchors objectForKey:touch];
@@ -179,8 +168,9 @@ static const CGFloat kRingLineWidth = 3.0;
         CGPoint start = anchor.CGPointValue;
         CGPoint now = [touch locationInView:host];
         if (hypot(now.x - start.x, now.y - start.y) > _movementTolerance) {
-            _roundInvalid = YES;
-            [self stopTimingFired:NO];
+            // Drifted: start over from where the fingers are now, rather than
+            // writing the whole hold off until every finger lifts.
+            [self countChanged];
             return;
         }
     }
@@ -207,7 +197,6 @@ static const CGFloat kRingLineWidth = 3.0;
     if (_tracked.count == 0) {
         // Every counted finger is up: a new round may start (stay Possible so a
         // finger still held on an OSC control doesn't lock us out).
-        _roundInvalid = NO;
         [self stopTimingFired:NO];
         return;
     }
@@ -218,7 +207,7 @@ static const CGFloat kRingLineWidth = 3.0;
 
 - (void)countChanged {
     [self stopTimingFired:NO];
-    if (_roundInvalid || self.state != UIGestureRecognizerStatePossible) return;
+    if (self.state != UIGestureRecognizerStatePossible) return;
     NSInteger count = [self currentCount];
     if (count < 3 || count > 5) return;
     if (self.fingerCountEnabled && !self.fingerCountEnabled(count)) return;
@@ -301,8 +290,6 @@ static const CGFloat kRingLineWidth = 3.0;
     }
     _lowestTouchPointHeight = screenHeight - lowestY;
     _recognizedFingerCount = count;
-    [_firedTouches removeAllObjects];
-    for (UITouch *touch in _tracked) [_firedTouches addObject:touch];
 
     [_haptic impactOccurred];
     [self stopTimingFired:YES];
@@ -315,7 +302,6 @@ static const CGFloat kRingLineWidth = 3.0;
     [self stopTimingFired:NO];
     [_tracked removeAllObjects];
     [_anchors removeAllObjects];
-    _roundInvalid = NO;
 }
 
 @end
