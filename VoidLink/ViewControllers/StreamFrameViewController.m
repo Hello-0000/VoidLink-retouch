@@ -1146,16 +1146,14 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self.view addSubview:_oscModeButton];
     }
 
-    // Hidden bottom-left GAME/DESK corner: disabled. It sat above the OSC and
-    // swallowed touches near the left stick, flipping to DESK mid-game. With it
-    // nil, the later .hidden/.frame writes are no-ops; modeSwitch_tapped stays
-    // for the BG3 edge swipe.
-    // if (!_modeSwitchButton) {
-    //     _modeSwitchButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    //     _modeSwitchButton.accessibilityLabel = @"切换手柄 / 键鼠模式";
-    //     [_modeSwitchButton addTarget:self action:@selector(modeSwitch_tapped) forControlEvents:UIControlEventTouchUpInside];
-    //     [self.view addSubview:_modeSwitchButton];
-    // }
+    // Hidden bottom-left GAME/DESK corner. Opt-in (settings, OSC group): it sits
+    // above the OSC and catches touches near the left stick.
+    if (!_modeSwitchButton) {
+        _modeSwitchButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        _modeSwitchButton.accessibilityLabel = @"切换手柄 / 键鼠模式";
+        [_modeSwitchButton addTarget:self action:@selector(modeSwitch_tapped) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:_modeSwitchButton];
+    }
 
     if (!_quickMenuButton) {
         _quickMenuButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -1225,7 +1223,7 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     // The two corner capsules stay put whatever the OSC does.
     _quickMenuButton.hidden = !isPad;
     _quickMenuBackdrop.hidden = !isPad || fullGame;
-    _modeSwitchButton.hidden = !isPad;
+    _modeSwitchButton.hidden = !isPad || ![[NSUserDefaults standardUserDefaults] boolForKey:StreamModeSwitchCornerDefaultsKey];
     if (!isPad) [self quickMenu_dismissAnimated:NO];
 
     if (!isPad) {
@@ -2168,7 +2166,7 @@ static const CGFloat kQuickMenuSpacing = 12;
 
 // Pencil landed on the stream (never on the OSC): a profiled game in GAME
 // mode goes to DESK, the pencil tap itself being the mouse input the game
-// switches on. Back to GAME is the edge swipe (edgeSwipeSwitchesMode).
+// switches on. Back to GAME is the edge swipe or the bottom-left corner.
 - (void)pencil_contactBegan {
     if (!_gameProfile.pencilSwitchesToDesk || self->_streamView.widgetToolOpened) return;
     if ([self osc_effectiveHideMode] != OscHideModeGame) return;

@@ -105,6 +105,8 @@ typedef NS_ENUM(NSInteger, OscPresentation) {
 @property (nonatomic) BOOL pencilDoubleTapDisabled;
 // NSUserDefaults key behind it (settings sidebar switch).
 extern NSString * const StreamViewBlockStreamTouchDefaultsKey;
+// Hidden bottom-left corner that flips GAME <-> DESK in one tap (default off).
+extern NSString * const StreamModeSwitchCornerDefaultsKey;
 // YES when the legacy OSC level is on or any widget is attached — i.e. there is
 // something to suspend.
 - (BOOL)hasAnyOnScreenControls;

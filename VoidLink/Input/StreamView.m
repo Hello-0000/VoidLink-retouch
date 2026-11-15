@@ -213,6 +213,7 @@ static BOOL RSPADALT2ShouldMigrateLinearAimDefaults(OnScreenWidgetView *widgetVi
 // View whose touches are dropped from multi-finger counting (the OSC ON/OFF
 // button while held). Weak: the button belongs to the host VC.
 NSString * const StreamViewBlockStreamTouchDefaultsKey = @"blockStreamTouchWhileOscActive";
+NSString * const StreamModeSwitchCornerDefaultsKey = @"modeSwitchCornerEnabled";
 static __weak UIView *sMultiTouchExemptView = nil;
 // The live StreamView's withheld-touch table (see blockStreamTouchesWhileOscActive):
 // the touch handlers and the tap recognizers count fingers through

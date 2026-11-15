@@ -126,6 +126,8 @@ static void *VLSegmentPullDownKVOContext = &VLSegmentPullDownKVOContext;
 @implementation SettingsViewController {
     UISwitch *_streamTouchBlockSwitch;
     UIStackView *_streamTouchBlockStack;
+    UIStackView *_modeSwitchCornerStack;
+    UISwitch *_modeSwitchCornerSwitch;
     UIStackView *_swapXyStack;
     // Rows that depend on the row above them: indented 16pt in their group.
     NSSet<NSString *> *_childStackIdentifiers;
@@ -868,6 +870,22 @@ BOOL isCustomResolution(int resolutionSelected) {
     _streamTouchBlockStack = [self swapButtonRowWithLabel:label switch:_streamTouchBlockSwitch];
 }
 
+// "Bottom-left corner switches Game/Desk": the invisible one-tap corner on the
+// stream. Off by default (it shadows OSC widgets near the left stick); read
+// on every bottom-row layout, so it applies when the sidebar closes.
+- (void)installModeSwitchCornerControl {
+    if (_modeSwitchCornerStack) return;
+    UILabel *label = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Bottom-left corner switches Game/Desk"]];
+    _modeSwitchCornerSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    [_modeSwitchCornerSwitch setOn:[[NSUserDefaults standardUserDefaults] boolForKey:StreamModeSwitchCornerDefaultsKey]];
+    [_modeSwitchCornerSwitch addTarget:self action:@selector(modeSwitchCornerSwitchFlipped:) forControlEvents:UIControlEventValueChanged];
+    _modeSwitchCornerStack = [self swapButtonRowWithLabel:label switch:_modeSwitchCornerSwitch];
+}
+
+- (void)modeSwitchCornerSwitchFlipped:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:StreamModeSwitchCornerDefaultsKey];
+}
+
 // "Audio follows Game/Desk": game mode plays only on the iPad, desk mode keeps
 // the PC's audio and mutes the iPad (needs the host agent). While on, the
 // stream always launches with host audio on, so "Play audio on PC" is moot.
@@ -1437,6 +1455,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.onScreenWidgetStack ofId:@"onScreenWidgetStack" withInfoTag:YES withDynamicLabel:YES to:oscSection];
     [self installStreamTouchBlockControl];
     [self addSetting:_streamTouchBlockStack ofId:@"streamTouchBlockStack" withInfoTag:NO withDynamicLabel:NO to:oscSection];
+    [self installModeSwitchCornerControl];
+    [self addSetting:_modeSwitchCornerStack ofId:@"modeSwitchCornerStack" withInfoTag:NO withDynamicLabel:NO to:oscSection];
     [self finishSection:oscSection];
 
     // 6. Controller (gyro rows hang off "Map Gyro To")
