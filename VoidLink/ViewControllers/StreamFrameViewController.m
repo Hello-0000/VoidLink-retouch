@@ -1123,8 +1123,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         // on setTitle:, which looks sluggish for these instant on/off toggles.
         _snapRatioButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _snapRatioButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
-        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
+        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.20] forState:UIControlStateNormal];
+        [_snapRatioButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _snapRatioButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_snapRatioButton addTarget:self action:@selector(toggleSnapRatio) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_snapRatioButton];
@@ -1136,8 +1136,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     if (!_oscModeButton) {
         _oscModeButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _oscModeButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
-        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
+        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.20] forState:UIControlStateNormal];
+        [_oscModeButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _oscModeButton.contentEdgeInsets = UIEdgeInsetsMake(4, 10, 4, 10);
         [_oscModeButton addTarget:self action:@selector(cycleOscHideMode) forControlEvents:UIControlEventTouchUpInside];
         // The finger on the button must not count toward the stream's multi-finger
@@ -1158,8 +1158,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         _quickMenuButton.accessibilityLabel = @"快捷菜单";
         [_quickMenuButton addTarget:self action:@selector(quickMenu_toggle) forControlEvents:UIControlEventTouchUpInside];
         _quickMenuBackdrop = [[VoidBackdropCapsuleView alloc] initWithFrame:CGRectZero];
-        // #B3B3B3 at 16% opacity: a faint marker; the hit area does the work.
-        [_quickMenuBackdrop setFillColor:[UIColor colorWithRed:0xB3/255.0 green:0xB3/255.0 blue:0xB3/255.0 alpha:0.16]];
+        // #B3B3B3 at 8% opacity: a faint marker; the hit area does the work.
+        [_quickMenuBackdrop setFillColor:[UIColor colorWithRed:0xB3/255.0 green:0xB3/255.0 blue:0xB3/255.0 alpha:0.08]];
         _quickMenuBackdrop.backdropEnabled = NO;
         [self.view addSubview:_quickMenuBackdrop];
         [self.view addSubview:_quickMenuButton];
@@ -1168,8 +1168,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     if (!_rotationLockToggleButton) {
         _rotationLockToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _rotationLockToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
-        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
+        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.20] forState:UIControlStateNormal];
+        [_rotationLockToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _rotationLockToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_rotationLockToggleButton addTarget:self action:@selector(toggleStreamOrientationLock) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_rotationLockToggleButton];
@@ -1180,8 +1180,8 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
     if (!_gyroToggleButton) {
         _gyroToggleButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _gyroToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.33] forState:UIControlStateNormal];
-        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.15] forState:UIControlStateHighlighted];
+        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.20] forState:UIControlStateNormal];
+        [_gyroToggleButton setTitleColor:[[UIColor whiteColor] colorWithAlphaComponent:0.10] forState:UIControlStateHighlighted];
         _gyroToggleButton.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
         [_gyroToggleButton addTarget:self action:@selector(toggleGyroOnOff) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:_gyroToggleButton];
@@ -1595,7 +1595,7 @@ static const CGFloat kQuickMenuSpacing = 12;
     if (!_timeLabel) {
         _timeLabel = [[UILabel alloc] init];
         _timeLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        _timeLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.33];
+        _timeLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.20];
         _timeLabel.userInteractionEnabled = NO;
         [self.view addSubview:_timeLabel];
     }
@@ -1604,7 +1604,7 @@ static const CGFloat kQuickMenuSpacing = 12;
     if (!_batteryLabel) {
         _batteryLabel = [[UILabel alloc] init];
         _batteryLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        _batteryLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.33];
+        _batteryLabel.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.20];
         _batteryLabel.userInteractionEnabled = NO;
         [self.view addSubview:_batteryLabel];
     }
@@ -1696,7 +1696,7 @@ static const CGFloat kQuickMenuSpacing = 12;
 #endif
 
 - (UIColor *)streamCountdownBaseTintColor {
-    return [[UIColor whiteColor] colorWithAlphaComponent:0.33];
+    return [[UIColor whiteColor] colorWithAlphaComponent:0.20];
 }
 
 - (CGSize)streamCountdownLabelSizeForText:(NSString *)text insets:(UIEdgeInsets)insets {
