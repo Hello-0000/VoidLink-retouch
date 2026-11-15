@@ -1146,12 +1146,16 @@ static BOOL VoidStreamOrientationLockEnabled(void) {
         [self.view addSubview:_oscModeButton];
     }
 
-    if (!_modeSwitchButton) {
-        _modeSwitchButton = [UIButton buttonWithType:UIButtonTypeCustom];
-        _modeSwitchButton.accessibilityLabel = @"切换手柄 / 键鼠模式";
-        [_modeSwitchButton addTarget:self action:@selector(modeSwitch_tapped) forControlEvents:UIControlEventTouchUpInside];
-        [self.view addSubview:_modeSwitchButton];
-    }
+    // Hidden bottom-left GAME/DESK corner: disabled. It sat above the OSC and
+    // swallowed touches near the left stick, flipping to DESK mid-game. With it
+    // nil, the later .hidden/.frame writes are no-ops; modeSwitch_tapped stays
+    // for the BG3 edge swipe.
+    // if (!_modeSwitchButton) {
+    //     _modeSwitchButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    //     _modeSwitchButton.accessibilityLabel = @"切换手柄 / 键鼠模式";
+    //     [_modeSwitchButton addTarget:self action:@selector(modeSwitch_tapped) forControlEvents:UIControlEventTouchUpInside];
+    //     [self.view addSubview:_modeSwitchButton];
+    // }
 
     if (!_quickMenuButton) {
         _quickMenuButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -2164,7 +2168,7 @@ static const CGFloat kQuickMenuSpacing = 12;
 
 // Pencil landed on the stream (never on the OSC): a profiled game in GAME
 // mode goes to DESK, the pencil tap itself being the mouse input the game
-// switches on. Back to GAME is the bottom-left corner.
+// switches on. Back to GAME is the edge swipe (edgeSwipeSwitchesMode).
 - (void)pencil_contactBegan {
     if (!_gameProfile.pencilSwitchesToDesk || self->_streamView.widgetToolOpened) return;
     if ([self osc_effectiveHideMode] != OscHideModeGame) return;
