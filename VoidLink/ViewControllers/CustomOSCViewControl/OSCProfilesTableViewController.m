@@ -96,6 +96,10 @@ static NSString * const kDefaultLayoutName = @"Default";
     [super viewDidLoad];
     [OSCSceneManager migrateIfNeeded];
     profilesManager = [OSCProfilesManager sharedManager:_layoutViewBounds];
+    // The sheet is drawn with fixed light colours (white bars, black text). Without
+    // this, dark mode turns the bar's title and Exit / Export / Import glyphs white
+    // on the white bar, so they vanish.
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
 
     self.tableView.delegate = self;
     self.tableView.dataSource = self;
@@ -158,30 +162,21 @@ static NSString * const kDefaultLayoutName = @"Default";
 }
 
 // Duplicate / Delete used to act on the "selected" row; they live in swipe actions now.
-// Import / Export are rebuilt in code on the right (where Duplicate / Delete were) so
-// they don't depend on the storyboard's crowded leading group, which iOS 26 can
-// collapse out of sight.
 - (void)osc_removeLegacyNavItems {
     UINavigationItem *item = self.profileTableViewNavigationBar.topItem;
     if (!item) return;
-    NSMutableArray *left = [NSMutableArray array];
-    for (UIBarButtonItem *b in item.leftBarButtonItems) {
-        if (b.action == @selector(exitTapped:)) [left addObject:b];
+    NSMutableArray *keep = [NSMutableArray array];
+    for (UIBarButtonItem *b in item.rightBarButtonItems) {
+        if (b.action == @selector(duplicateTapped:) || b.action == @selector(deleteTapped:)) continue;
+        [keep addObject:b];
     }
-    item.leftBarButtonItems = left;
-
-    UIBarButtonItem *export = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"square.and.arrow.up"]
-                                                               style:UIBarButtonItemStylePlain
-                                                              target:self
-                                                              action:@selector(exportDataTapped:)];
-    export.accessibilityLabel = [LocalizationHelper localizedStringForKey:@"ExportAll"];
-    UIBarButtonItem *import = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"square.and.arrow.down"]
-                                                               style:UIBarButtonItemStylePlain
-                                                              target:self
-                                                              action:@selector(importDataTapped:)];
-    import.accessibilityLabel = [LocalizationHelper localizedStringForKey:@"Import"];
-    item.rightBarButtonItems = @[export, import];
-
+    item.rightBarButtonItems = keep;
+    keep = [NSMutableArray array];
+    for (UIBarButtonItem *b in item.leftBarButtonItems) {
+        if (b.action == @selector(duplicateTapped:) || b.action == @selector(deleteTapped:)) continue;
+        [keep addObject:b];
+    }
+    item.leftBarButtonItems = keep;
     [self osc_stripGlass:item.leftBarButtonItems];
     [self osc_stripGlass:item.rightBarButtonItems];
 }
