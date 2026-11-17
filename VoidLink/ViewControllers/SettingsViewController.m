@@ -125,6 +125,8 @@ static void *VLSegmentPullDownKVOContext = &VLSegmentPullDownKVOContext;
 
 @implementation SettingsViewController {
     UISwitch *_streamTouchBlockSwitch;
+    UIStackView *_gestureCommandOnLeaveStack;
+    UISwitch *_gestureCommandOnLeaveSwitch;
     UIStackView *_streamTouchBlockStack;
     UIStackView *_modeSwitchCornerStack;
     UISwitch *_modeSwitchCornerSwitch;
@@ -1027,6 +1029,23 @@ BOOL isCustomResolution(int resolutionSelected) {
     _gestureCommandTargetButton = [self gestureRowButtonWithSymbol:@"chevron.right"];
     [_gestureCommandTargetButton addTarget:self action:@selector(gestureCommandTargetTapped:) forControlEvents:UIControlEventTouchUpInside];
     _gestureCommandTargetStack = [self gestureRowWithLabel:commandLabel button:_gestureCommandTargetButton];
+
+    UILabel *onLeaveLabel = [self gestureRowLabelWithText:[LocalizationHelper localizedStringForKey:@"Send on Exit or Lock in 16:9 Game"]];
+    _gestureCommandOnLeaveSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    _gestureCommandOnLeaveSwitch.onTintColor = [ThemeManager sidebarAccent];
+    _gestureCommandOnLeaveSwitch.on = [StreamGestureBindings sendCommandOnLeave];
+    [_gestureCommandOnLeaveSwitch addTarget:self action:@selector(gestureCommandOnLeaveFlipped:) forControlEvents:UIControlEventValueChanged];
+    [_gestureCommandOnLeaveSwitch setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [_gestureCommandOnLeaveSwitch setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    _gestureCommandOnLeaveStack = [[UIStackView alloc] initWithArrangedSubviews:@[onLeaveLabel, _gestureCommandOnLeaveSwitch]];
+    _gestureCommandOnLeaveStack.axis = UILayoutConstraintAxisHorizontal;
+    _gestureCommandOnLeaveStack.alignment = UIStackViewAlignmentCenter;
+    _gestureCommandOnLeaveStack.distribution = UIStackViewDistributionFill;
+    _gestureCommandOnLeaveStack.spacing = 12;
+}
+
+- (void)gestureCommandOnLeaveFlipped:(UISwitch *)sender {
+    [StreamGestureBindings setSendCommandOnLeave:sender.isOn];
 }
 
 - (UIMenu *)gestureTriggerMenuForAction:(StreamGestureAction)action {
@@ -1066,6 +1085,7 @@ BOOL isCustomResolution(int resolutionSelected) {
 
     BOOL commandBound = [StreamGestureBindings triggerForAction:StreamGestureActionGestureCommand] != StreamGestureTriggerNone;
     if (_gestureCommandTargetStack) [self setHidden:!commandBound forStack:_gestureCommandTargetStack];
+    if (_gestureCommandOnLeaveStack) [self setHidden:!commandBound forStack:_gestureCommandOnLeaveStack];
     BOOL sheetOnEdge = [StreamGestureBindings isEdgeTrigger:[StreamGestureBindings triggerForAction:StreamGestureActionSettings]]
                     || [StreamGestureBindings isEdgeTrigger:[StreamGestureBindings triggerForAction:StreamGestureActionToolbox]];
     if (self.slideToSettingsDistanceStack) [self setHidden:!sheetOnEdge forStack:self.slideToSettingsDistanceStack];
@@ -1408,6 +1428,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         @"gyroModeStack", @"gyroSensitivityStack", @"gyroInvertPitchStack", @"gyroInvertYawStack",
         @"pencilHoldDelayStack", @"pencilHardPressThresholdStack",
         @"gestureCommandTargetStack",
+        @"gestureCommandOnLeaveStack",
     ]];
 
     // 1. Video
@@ -1498,6 +1519,7 @@ BOOL isCustomResolution(int resolutionSelected) {
         [self addSetting:_gestureRowStacks[action] ofId:[self gestureRowIdentifierForAction:action.integerValue] withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
         if (action.integerValue == StreamGestureActionGestureCommand) {
             [self addSetting:_gestureCommandTargetStack ofId:@"gestureCommandTargetStack" withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
+            [self addSetting:_gestureCommandOnLeaveStack ofId:@"gestureCommandOnLeaveStack" withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
         }
     }
     self.slideToSettingsDistanceUILabel.text = [LocalizationHelper localizedStringForKey:@"Edge Swipe Distance"];

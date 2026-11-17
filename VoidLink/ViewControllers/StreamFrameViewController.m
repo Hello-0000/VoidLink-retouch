@@ -229,6 +229,8 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // Async probe completions check this so they never start a StreamManager or
     // a self-heal loop on a popped view controller (zombie session).
     BOOL _hasLeftStreamPage;
+    BOOL _leaveCommandSent;                       // gesture command already sent for this exit / background
+    BOOL _leaveExitPending;                       // an exit is waiting for the leave command to land
     BOOL _hasConnectionStarted;
     // Set when connectionTerminated/stageFailed reported an abnormal end. Blocks
     // clearing the dirty-session flag at teardown: after an abnormal end the host
@@ -4304,7 +4306,51 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     [defaults synchronize];
 }
 
+// "Send on exit or lock in a 16:9 game": fires the gesture command once while
+// the connection is still up. YES when it was sent, so the caller can give the
+// key-up events time to reach the host before tearing the stream down.
+- (BOOL)leaveCommand_sendIfNeeded {
+    if (_leaveCommandSent || !_streamSessionConnectionLive) return NO;
+    if (![StreamGestureBindings sendCommandOnLeave]) return NO;
+    if ([StreamGestureBindings triggerForAction:StreamGestureActionGestureCommand] == StreamGestureTriggerNone) return NO;
+    NSString *cmd = [StreamGestureBindings commandString];
+    if (cmd.length == 0) return NO;
+    // Built-ins act on the iPad, not the host: nothing to send on the way out.
+    NSString *upper = cmd.uppercaseString;
+    if ([upper isEqualToString:CommandManager.softKeyboardCommand] || [upper isEqualToString:CommandManager.audioOutputCommand]) return NO;
+    if ([self osc_effectiveHideMode] != OscHideModeGame || [self snap_effectiveRatioMode] != 0) return NO;
+    _leaveCommandSent = YES;
+    Log(LOG_I, @"[GestureCommand] leaving a 16:9 game stream, sending %@", cmd);
+    [_streamView sendOneShotCommand:cmd];
+    return YES;
+}
+
+// How long to hold the teardown so the leave command finishes on the host:
+// chords take up to ~350ms; explicit "…-500MS-…" waits in the command add on.
+- (NSTimeInterval)leaveCommand_settleDelay {
+    NSTimeInterval delay = 0.5;
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"(\\d+)MS" options:0 error:nil];
+    NSString *cmd = [StreamGestureBindings commandString].uppercaseString;
+    for (NSTextCheckingResult *m in [re matchesInString:cmd options:0 range:NSMakeRange(0, cmd.length)]) {
+        delay += [[cmd substringWithRange:[m rangeAtIndex:1]] doubleValue] / 1000.0;
+    }
+    return MIN(delay, 3.0);
+}
+
 - (void)returnToMainFrameAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
+    if (_leaveExitPending) return; // already leaving: the delayed teardown below runs once
+    if ([self leaveCommand_sendIfNeeded]) {
+        _leaveExitPending = YES;
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)([self leaveCommand_settleDelay] * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf returnToMainFrameNowAllowingBackgroundAutoResume:allowBackgroundResume];
+        });
+        return;
+    }
+    [self returnToMainFrameNowAllowingBackgroundAutoResume:allowBackgroundResume];
+}
+
+- (void)returnToMainFrameNowAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
     [self resetFinishedStreamCountdownToIdleIfNeeded];
     _streamSessionConnectionLive = NO;
     [self endStreamSessionActivity];
@@ -4472,6 +4518,8 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         _inactivityTimer = nil;
     }
 
+    if (!_leaveExitPending) _leaveCommandSent = NO; // back in the stream: the next exit / lock sends again
+
     // Cancel any pending background graceful stop — the user came back while
     // the stream is still alive, so let it continue seamlessly.
     _bgStopEpoch++;
@@ -4503,6 +4551,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 
 // This fires when the home button is pressed
 - (void)applicationDidEnterBackground:(UIApplication *)application {
+    BOOL leaveCommandSent = [self leaveCommand_sendIfNeeded];
     [self resetFinishedStreamCountdownToIdleIfNeeded];
     [self backdrop_updateRegions]; // capsules are off screen: stop sampling (PiP keeps decoding)
 
@@ -4603,7 +4652,15 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
             // swipe-kill right after this leaves no zombie holding slot 0 —
             // the next session's arrival binds the right pad immediately.
             NSLog(@"[InputDiag] background disconnect setting — stopping stream now");
-            [self performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
+            if (leaveCommandSent) {
+                // Let the leave command's key-ups reach the host first.
+                __weak typeof(self) weakSelf = self;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)([self leaveCommand_settleDelay] * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    [weakSelf performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
+                });
+            } else {
+                [self performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
+            }
         } else {
             [self scheduleBackgroundSuspensionWatchdogForEpoch:epoch afterDelay:2.0];
         }
