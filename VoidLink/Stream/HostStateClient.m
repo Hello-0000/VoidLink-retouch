@@ -47,6 +47,7 @@ BOOL HostAgentEmulatorAutoPauseEnabled(void) {
     _displayPrimary = [json[@"display_primary"] boolValue];
     _displayFound = [json[@"display_found"] boolValue];
     _seq = [json[@"seq"] unsignedIntegerValue];
+    _protocolVersion = [json[@"v"] isKindOfClass:[NSNumber class]] ? [json[@"v"] integerValue] : 0;
     _topForeground = [top[@"foreground"] boolValue];
     _topCoversDisplay = [top[@"covers_display"] boolValue];
     NSArray *client = [top[@"client"] isKindOfClass:[NSArray class]] ? top[@"client"] : nil;
@@ -70,6 +71,10 @@ BOOL HostAgentEmulatorAutoPauseEnabled(void) {
     BOOL _running;
     BOOL _live;
     NSUInteger _generation; // bumps on every (re)connect so stale callbacks are ignored
+    NSInteger _nextAckId;
+    // id -> completion of an ack-awaiting command (on _queue). Each entry is
+    // finished exactly once: ack line, timeout, or the link going away.
+    NSMutableDictionary<NSNumber *, void (^)(BOOL, NSString *)> *_pendingAcks;
 }
 
 + (NSString *)hostWithoutPort:(NSString *)host {
@@ -91,6 +96,7 @@ BOOL HostAgentEmulatorAutoPauseEnabled(void) {
     _queue = dispatch_queue_create("com.voidlink.host-state", DISPATCH_QUEUE_SERIAL);
     _buffer = [NSMutableData data];
     _reconnectDelay = kReconnectMinDelay;
+    _pendingAcks = [NSMutableDictionary dictionary];
     return self;
 }
 
@@ -126,6 +132,88 @@ BOOL HostAgentEmulatorAutoPauseEnabled(void) {
         [self queue_teardownConnection];
         [self queue_setLive:NO];
     });
+}
+
+- (void)sendCommand:(NSString *)command
+          arguments:(NSDictionary<NSString *, id> *)arguments
+         ackTimeout:(NSTimeInterval)timeout
+         completion:(void (^)(BOOL, NSString *))completion {
+    [self queue_async_sendCommand:command arguments:arguments ackTimeout:timeout stopAfter:NO completion:completion];
+}
+
+- (void)stopAfterSendingCommand:(NSString *)command
+                      arguments:(NSDictionary<NSString *, id> *)arguments
+                     ackTimeout:(NSTimeInterval)timeout
+                     completion:(void (^)(BOOL, NSString *))completion {
+    [self queue_async_sendCommand:command arguments:arguments ackTimeout:timeout stopAfter:YES completion:completion];
+}
+
+- (void)queue_async_sendCommand:(NSString *)command
+                      arguments:(NSDictionary<NSString *, id> *)arguments
+                     ackTimeout:(NSTimeInterval)timeout
+                      stopAfter:(BOOL)stopAfter
+                     completion:(void (^)(BOOL, NSString *))completion {
+    void (^userCompletion)(BOOL, NSString *) = [completion copy];
+    dispatch_async(_queue, ^{
+        if (stopAfter) self->_running = NO;    // no reconnect while we wait
+        // Runs once on _queue: optionally close the link, then hop to main.
+        // Strong self on purpose: the client must outlive the caller dropping it.
+        void (^finish)(BOOL, NSString *) = ^(BOOL acked, NSString *parked) {
+            if (stopAfter) {
+                self->_running = NO;
+                self->_generation++;
+                [self queue_teardownConnection];
+                [self queue_setLive:NO];
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (userCompletion) userCompletion(acked, parked);
+            });
+        };
+        nw_connection_t connection = self->_connection;
+        NSInteger ackId = ++self->_nextAckId;
+        NSMutableDictionary *withId = [NSMutableDictionary dictionaryWithDictionary:arguments ?: @{}];
+        withId[@"id"] = @(ackId);
+        NSData *line = [HostStateClient lineForCommand:command arguments:withId];
+        if (!connection || !self->_live || !line) {
+            Log(LOG_W, @"[HostAgent] cmd %@ (ack %ld) not sent: link not live", command, (long)ackId);
+            finish(NO, nil);
+            return;
+        }
+        NSNumber *key = @(ackId);
+        self->_pendingAcks[key] = finish;
+        dispatch_data_t payload = dispatch_data_create(line.bytes, line.length, self->_queue, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+        nw_connection_send(connection, payload, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, false, ^(nw_error_t error) {
+            if (error) Log(LOG_W, @"[HostAgent] cmd %@ (ack %ld) send failed: %d", command, (long)ackId, nw_error_get_error_code(error));
+            else Log(LOG_I, @"[HostAgent] cmd %@ sent, awaiting ack %ld", command, (long)ackId);
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC)), self->_queue, ^{
+            void (^pending)(BOOL, NSString *) = self->_pendingAcks[key];
+            if (!pending) return;
+            [self->_pendingAcks removeObjectForKey:key];
+            Log(LOG_W, @"[HostAgent] no ack %ld within %.1fs, going on", (long)ackId, timeout);
+            pending(NO, nil);
+        });
+    });
+}
+
+- (void)queue_handleAck:(NSDictionary *)json {
+    id ackId = json[@"id"];
+    if (![ackId isKindOfClass:[NSNumber class]]) return;
+    NSNumber *key = @([ackId integerValue]);
+    void (^pending)(BOOL, NSString *) = _pendingAcks[key];
+    if (!pending) return;                   // timed out already, or not ours
+    [_pendingAcks removeObjectForKey:key];
+    NSString *parked = [json[@"parked"] isKindOfClass:[NSString class]] ? json[@"parked"] : nil;
+    Log(LOG_I, @"[HostAgent] ack %@: parked=%@ verified=%@", key, parked ?: @"-", json[@"verified"] ?: @"-");
+    pending(YES, parked);
+}
+
+// The link is going away: nothing pending can be acked any more.
+- (void)queue_failPendingAcks {
+    if (_pendingAcks.count == 0) return;
+    NSArray *pending = _pendingAcks.allValues;
+    [_pendingAcks removeAllObjects];
+    for (void (^finish)(BOOL, NSString *) in pending) finish(NO, nil);
 }
 
 - (void)stopAfterSendingCommand:(NSString *)command arguments:(NSDictionary<NSString *, id> *)arguments {
@@ -283,6 +371,10 @@ BOOL HostAgentEmulatorAutoPauseEnabled(void) {
         NSError *jsonError = nil;
         id json = [NSJSONSerialization JSONObjectWithData:line options:0 error:&jsonError];
         if (![json isKindOfClass:[NSDictionary class]]) continue;
+        if (json[@"ack"] != nil) {           // an answer, not a state line
+            [self queue_handleAck:json];
+            continue;
+        }
         HostState *state = [[HostState alloc] initWithJSON:json];
         _lastState = state;
         [self queue_sendPing];
@@ -324,6 +416,7 @@ BOOL HostAgentEmulatorAutoPauseEnabled(void) {
 }
 
 - (void)queue_teardownConnection {
+    [self queue_failPendingAcks];
     if (_staleTimer) { dispatch_source_cancel(_staleTimer); _staleTimer = nil; }
     if (_connection) {
         nw_connection_t connection = _connection;

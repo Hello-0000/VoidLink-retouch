@@ -148,6 +148,10 @@ static inline int16_t clamp_int16(CGFloat v) {
 // Weak so this never extends an instance's lifetime; identity-compared only.
 // objc weak loads are thread-safe (updateFinished runs on several threads).
 static __weak ControllerSupport* sActiveControllerSupport = nil;
+
+static volatile BOOL sHostInputSuspended = NO;
+void VLSetHostInputSuspended(BOOL suspended) { sHostInputSuspended = suspended; }
+BOOL VLHostInputSuspended(void) { return sHostInputSuspended; }
 static NSInteger sAliveControllerSupportCount = 0;
 
 // UPDATE_BUTTON_FLAG(controller, flag, pressed)
@@ -710,6 +714,7 @@ static NSInteger sAliveControllerSupportCount = 0;
                             // gyro is being routed to stick/mouse — sending accel
                             // alone would produce inconsistent host-side motion state.
                             if (self->_mapGyroTo != MapGyroToMotion) return;
+                            if (VLHostInputSuspended()) return;   // exit waiting for the host agent
                             // Don't send duplicate samples
                             CMAcceleration lastDeviceAccelSample = voidController.lastDeviceAccelSample;
                             CMAcceleration deviceAccelSample = voidController.motionManager.deviceMotion.userAcceleration;
@@ -780,7 +785,8 @@ static NSInteger sAliveControllerSupportCount = 0;
                             // aimed: send nothing. The host agent also reads input
                             // arriving while the user is away as someone at the PC.
                             BOOL emit = [strongSelf motionEmissionAllowed] && strongSelf->_mapGyroTo != MapGyroToOff
-                                && [UIApplication sharedApplication].applicationState != UIApplicationStateBackground;
+                                && [UIApplication sharedApplication].applicationState != UIApplicationStateBackground
+                                && !VLHostInputSuspended();   // exit waiting for the host agent
                             // When suppressed, drop any leftover RightStick gyro
                             // contribution to 0 once. Otherwise the last non-zero
                             // value would keep blending into the physical stick.
@@ -1928,6 +1934,7 @@ static NSInteger sAliveControllerSupportCount = 0;
 -(void) registerMouseCallbacks:(GCMouse*) mouse API_AVAILABLE(ios(14.0)) {
     if (_captureMouse){
         mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput * _Nonnull mouse, float deltaX, float deltaY) {
+            if (VLHostInputSuspended()) return;
             self->accumulatedDeltaX += deltaX / MOUSE_SPEED_DIVISOR;
             self->accumulatedDeltaY += -deltaY / MOUSE_SPEED_DIVISOR;
             
@@ -1947,23 +1954,28 @@ static NSInteger sAliveControllerSupportCount = 0;
 
     
     mouse.mouseInput.leftButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+        if (VLHostInputSuspended()) return;
         LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_LEFT);
     };
     mouse.mouseInput.middleButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+        if (VLHostInputSuspended()) return;
         LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_MIDDLE);
     };
     mouse.mouseInput.rightButton.pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+        if (VLHostInputSuspended()) return;
         LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
     };
     
     if (mouse.mouseInput.auxiliaryButtons != nil) {
         if (mouse.mouseInput.auxiliaryButtons.count >= 1) {
             mouse.mouseInput.auxiliaryButtons[0].pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+                if (VLHostInputSuspended()) return;
                 LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_X1);
             };
         }
         if (mouse.mouseInput.auxiliaryButtons.count >= 2) {
             mouse.mouseInput.auxiliaryButtons[1].pressedChangedHandler = ^(GCControllerButtonInput * _Nonnull button, float value, BOOL pressed) {
+                if (VLHostInputSuspended()) return;
                 LiSendMouseButtonEvent(pressed ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_X2);
             };
         }

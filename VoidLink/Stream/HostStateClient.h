@@ -38,6 +38,9 @@ FOUNDATION_EXPORT BOOL HostAgentEmulatorAutoPauseEnabled(void);
 @property (nonatomic, readonly) BOOL displayPrimary;
 @property (nonatomic, readonly) BOOL displayFound;
 @property (nonatomic, readonly) NSUInteger seq;
+// The agent's protocol version ("v"). 2+: an "away" carrying an "id" is acked
+// once the leave took effect (see -sendCommand:arguments:ackTimeout:completion:).
+@property (nonatomic, readonly) NSInteger protocolVersion;
 // About the window the agent judged by (top): whether it has the focus, is a
 // covering (fullscreen-sized) window, and its client area in host pixels
 // (0 when the agent predates the field).
@@ -72,6 +75,23 @@ FOUNDATION_EXPORT BOOL HostAgentEmulatorAutoPauseEnabled(void);
 // Like stop, but first sends {"cmd": command, ...} on the live link and closes
 // it only once the line is out (stop alone may drop a just-queued send).
 - (void)stopAfterSendingCommand:(NSString *)command arguments:(nullable NSDictionary<NSString *, id> *)arguments;
+
+// Ack-awaiting variants (agent protocol v2+). The command goes out with a fresh
+// "id"; `completion` runs once on the main queue: acked YES with the agent's
+// "parked" value ("pause" / "hide" / nil) when the matching
+// {"ack":...,"id":N} line arrives, or acked NO after `timeout`, when the link
+// drops, or right away when the link is not live. Ack lines are not state
+// lines: they don't touch lastState, staleness or the delegate.
+- (void)sendCommand:(NSString *)command
+          arguments:(nullable NSDictionary<NSString *, id> *)arguments
+         ackTimeout:(NSTimeInterval)timeout
+         completion:(void (^)(BOOL acked, NSString * _Nullable parked))completion;
+// Same, then closes the link (as -stop) before `completion` runs. The client
+// stops reconnecting at once and stays alive until it is done.
+- (void)stopAfterSendingCommand:(NSString *)command
+                      arguments:(nullable NSDictionary<NSString *, id> *)arguments
+                     ackTimeout:(NSTimeInterval)timeout
+                     completion:(void (^)(BOOL acked, NSString * _Nullable parked))completion;
 
 // Sends {"cmd": command} as one JSON line to the agent. Fire-and-forget:
 // dropped (with a log line) when the link is not live. Any queue.

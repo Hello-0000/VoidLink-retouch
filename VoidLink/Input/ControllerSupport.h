@@ -11,6 +11,14 @@
 
 @class OnScreenControls;
 
+// Host-input gate for the stream's exit wait (StreamFrameViewController holds the
+// stream up until the host agent has parked the emulator): while set, physical
+// mouse / keyboard and gyro (motion, stick, mouse) send nothing, so no click or
+// key can hand the emulator its focus back. The gamepad stays connected. Main
+// thread writes; any thread reads.
+FOUNDATION_EXPORT void VLSetHostInputSuspended(BOOL suspended);
+FOUNDATION_EXPORT BOOL VLHostInputSuspended(void);
+
 @protocol ControllerSupportDelegate <NSObject>
 
 - (void)gamepadPresenceChanged;

@@ -7,11 +7,13 @@
 //
 
 #import "KeyboardSupport.h"
+#import "ControllerSupport.h"   // VLHostInputSuspended
 #include <Limelight.h>
 
 @implementation KeyboardSupport
 
 + (BOOL)sendKeyEventForPress:(UIPress*)press down:(BOOL)down API_AVAILABLE(ios(13.4)) {
+    if (VLHostInputSuspended()) return YES;   // swallowed: exit waiting for the host agent
     if (press.key != nil) {
         return [KeyboardSupport sendKeyEvent:press.key down:down];
     }
@@ -45,6 +47,7 @@
 }
 
 + (BOOL)sendKeyEvent:(UIKey*)key down:(BOOL)down API_AVAILABLE(ios(13.4)) {
+    if (VLHostInputSuspended()) return YES;
     char modifierFlags = 0;
     short keyCode = 0;
     

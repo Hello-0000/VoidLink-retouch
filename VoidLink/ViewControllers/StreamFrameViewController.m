@@ -321,6 +321,16 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     HostStateClient *_hostStateClient;       // host agent link; outranks the pixel detector while live
     BOOL _hostAgentLive;
     NSString *_emuSessionSent;               // last {"cmd":"session"} state sent on this agent link (nil: none yet)
+    // Exit held until the agent acked the final "away" (see
+    // returnToMainFrameAllowingBackgroundAutoResume:). While set, further exit
+    // requests only fold into the one pending teardown.
+    BOOL _exitAwaitingAgentAck;
+    BOOL _exitAllowBackgroundResume;
+    // Keeps the process running through that wait (the user may background
+    // right after exiting); ended a few seconds after the teardown.
+    UIBackgroundTaskIdentifier _exitAckTask;
+    // Run once the (possibly deferred) exit teardown has actually happened.
+    NSMutableArray<dispatch_block_t> *_afterExitTeardown;
     BOOL _dummyEventPausedForBackground;     // keep-alive paused by didEnterBackground, resumed by didBecomeActive
     BOOL _detectorFits;                      // detector's own 16:9 verdict, kept apart from the applied one
     // The agent's game on top (lower-cased exe; nil unless the agent says
@@ -4349,7 +4359,109 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     [defaults synchronize];
 }
 
+// How long the exit waits for the agent's ack of the final "away". The agent
+// itself gives up verifying after ~1.15s (1.0s poll cap + settle).
+static const NSTimeInterval kHostAgentAwayAckTimeout = 1.5;
+
+// Every exit from the stream goes through here. When the agent link takes part
+// in auto-pause and the agent acks (protocol v2+), the stream is kept up until
+// the agent has parked the emulator: tearing the stream down first unplugs
+// Sunshine's virtual gamepad, and Ryujinx, not yet paused, pops its
+// "controller not connected" applet. Older agents: no wait, as before.
 - (void)returnToMainFrameAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
+    [self returnToMainFrameAllowingBackgroundAutoResume:allowBackgroundResume awaitAgent:YES];
+}
+
+// awaitAgent NO: tear down right now, never waiting for the agent (the
+// background task's expiration: the process may be frozen any moment). The
+// final "away" still goes out fire-and-forget from hostAgent_stop when the link
+// is still attached; a wait already in progress is cut short.
+- (void)returnToMainFrameAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume awaitAgent:(BOOL)awaitAgent {
+    if (_exitAwaitingAgentAck && !awaitAgent) {
+        Log(LOG_I, @"[HostAgent] exit can't wait any longer: tearing the stream down without the ack");
+        BOOL allow = _exitAllowBackgroundResume && allowBackgroundResume;
+        _exitAwaitingAgentAck = NO;           // the ack's completion becomes a no-op
+        [self returnToMainFrameNowAllowingBackgroundAutoResume:allow];
+        return;
+    }
+    if (_exitAwaitingAgentAck) {
+        // One teardown for all of them; an explicit exit wins over auto-resume.
+        _exitAllowBackgroundResume = _exitAllowBackgroundResume && allowBackgroundResume;
+        Log(LOG_I, @"[HostAgent] exit already waiting for the agent's ack");
+        return;
+    }
+    BOOL participating = [_emuSessionSent isEqualToString:@"active"] || [_emuSessionSent isEqualToString:@"away"];
+    HostStateClient *client = _hostStateClient;
+    BOOL wantWait = awaitAgent && client && _hostAgentLive && participating && client.lastState.protocolVersion >= 2;
+    if (wantWait) {
+        // The wait must survive a background right after the exit (app frozen:
+        // neither the ack nor the timeout would ever fire, the stream would
+        // stay up). No task, no wait: tear down at once, as before.
+        __weak typeof(self) weakTaskSelf = self;
+        __block UIBackgroundTaskIdentifier task = UIBackgroundTaskInvalid;
+        task = [[UIApplication sharedApplication] beginBackgroundTaskWithName:@"VoidExitAwaitAgentAck" expirationHandler:^{
+            __strong typeof(weakTaskSelf) self = weakTaskSelf;
+            if (self && self->_exitAckTask == task) {
+                self->_exitAckTask = UIBackgroundTaskInvalid;   // ended right here, not by the teardown
+                if (self->_exitAwaitingAgentAck) [self returnToMainFrameAllowingBackgroundAutoResume:YES awaitAgent:NO];
+            }
+            [[UIApplication sharedApplication] endBackgroundTask:task];
+        }];
+        if (task == UIBackgroundTaskInvalid) {
+            Log(LOG_W, @"[HostAgent] no background task for the exit wait: tearing down without the ack");
+            wantWait = NO;
+        } else {
+            _exitAckTask = task;
+        }
+    }
+    if (wantWait) {
+        _exitAwaitingAgentAck = YES;
+        _exitAllowBackgroundResume = allowBackgroundResume;
+        // Nothing may revive or drive the stream meanwhile: no self-heal, and no
+        // input of any kind reaching the host — a click or key could hand the
+        // emulator its focus back before it paused. The stream (and with it the
+        // virtual gamepad) stays up until the ack.
+        _hasLeftStreamPage = YES;
+        [self stopSelfHealReconnectLoop];
+        [self exit_suspendHostInput];
+        // Detach the link now (like hostAgent_stop): no state callbacks, no
+        // second "away" from the deferred teardown below.
+        client.delegate = nil;
+        _hostStateClient = nil;
+        _hostAgentLive = NO;
+        _emuSessionSent = nil;
+        Log(LOG_I, @"[HostAgent] session -> away (closing the link once the agent acks)");
+        __weak typeof(self) weakSelf = self;
+        [client stopAfterSendingCommand:@"session" arguments:@{@"state": @"away"}
+                             ackTimeout:kHostAgentAwayAckTimeout
+                             completion:^(BOOL acked, NSString *parked) {
+            __strong typeof(weakSelf) self = weakSelf;
+            if (!self || !self->_exitAwaitingAgentAck) return;
+            Log(LOG_I, @"[HostAgent] away %@ (parked=%@): tearing the stream down",
+                acked ? @"acked" : @"not acked", parked ?: @"-");
+            BOOL allow = self->_exitAllowBackgroundResume;
+            self->_exitAwaitingAgentAck = NO;
+            [self returnToMainFrameNowAllowingBackgroundAutoResume:allow];
+        }];
+        return;
+    }
+    [self returnToMainFrameNowAllowingBackgroundAutoResume:allowBackgroundResume];
+}
+
+// Every input source that could reach the host while the exit waits: touches
+// and OSC (the whole page stops taking touches), physical mouse / keyboard and
+// gyro (VLHostInputSuspended), the keep-alive key, queued profile nudges.
+- (void)exit_suspendHostInput {
+    self.view.userInteractionEnabled = NO;
+    [self setUserInteractionEnabledForStreamView:NO];
+    VLSetHostInputSuspended(YES);
+    if (_dummyEventLink) _dummyEventLink.paused = YES;
+    _nudgeGeneration++;
+}
+
+- (void)returnToMainFrameNowAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
+    // The stream is going now; the gate must not outlive it into the next one.
+    VLSetHostInputSuspended(NO);
     [self resetFinishedStreamCountdownToIdleIfNeeded];
     _streamSessionConnectionLive = NO;
     [self endStreamSessionActivity];
@@ -4383,6 +4495,27 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     _extWindow = nil;
     
     self.mainFrameViewcontroller.settingsExpandedInStreamView = false; // reset this flag to false
+
+    // The exit wait's background task: keep it a little longer so the stop
+    // (LiStopConnection's linger) can finish, like the background graceful stop.
+    UIBackgroundTaskIdentifier exitTask = _exitAckTask;
+    _exitAckTask = UIBackgroundTaskInvalid;
+    if (exitTask != UIBackgroundTaskInvalid) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [[UIApplication sharedApplication] endBackgroundTask:exitTask];
+        });
+    }
+
+    NSArray<dispatch_block_t> *hooks = [_afterExitTeardown copy];
+    _afterExitTeardown = nil;
+    for (dispatch_block_t hook in hooks) hook();
+}
+
+// `block` runs on main once the exit teardown has happened: right away if the
+// exit goes straight through, after the agent's ack if it waits.
+- (void)afterExitTeardown:(dispatch_block_t)block {
+    if (!_afterExitTeardown) _afterExitTeardown = [NSMutableArray array];
+    [_afterExitTeardown addObject:[block copy]];
 }
 
 - (void) returnToMainFrame {
@@ -4522,6 +4655,14 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     _bgStopEpoch++;
     [self endBackgroundGracefulStopTask];
 
+    if (_exitAwaitingAgentAck) {
+        // Back while the exit waits for the agent: the exit stands. Don't
+        // restart the keep-alive or the session clock for a stream that is
+        // about to go (input now would read as someone at the PC).
+        Log(LOG_I, @"[HostAgent] foreground while the exit waits for the agent's ack: exit stands");
+        return;
+    }
+
     [self emu_syncSession];   // back in the stream: the agent may resume a paused emulator
     if (_dummyEventPausedForBackground) {
         _dummyEventPausedForBackground = NO;
@@ -4624,7 +4765,11 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     NSLog(@"[InputDiag] didEnterBackground pip=%d airplay=%d leftPage=%d remaining=%.0fs",
           pipActive, [self isAirPlaying], _hasLeftStreamPage,
           [UIApplication sharedApplication].backgroundTimeRemaining);
-    if (!_hasLeftStreamPage && !pipActive && ![self isAirPlaying]) {
+    if (_exitAwaitingAgentAck) {
+        // Exit in progress (waiting for the agent's ack): its own background
+        // task keeps us running until the teardown; nothing to arm here.
+        NSLog(@"[InputDiag] didEnterBackground during the exit's agent wait: its task covers it");
+    } else if (!_hasLeftStreamPage && !pipActive && ![self isAirPlaying]) {
         _bgStopEpoch++;
         NSUInteger epoch = _bgStopEpoch;
         [self endBackgroundGracefulStopTask];
@@ -4635,6 +4780,10 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
                       expirationHandler:^{
             // Fallback only — the watchdog below normally acts ~15s earlier.
             typeof(self) strongSelf = weakSelf;
+            if (strongSelf && strongSelf->_exitAwaitingAgentAck) {
+                // An exit is still waiting for the agent: no time for that now.
+                [strongSelf returnToMainFrameAllowingBackgroundAutoResume:YES awaitAgent:NO];
+            }
             if (strongSelf && epoch == strongSelf->_bgStopEpoch) {
                 // Enqueue the teardown and end the task immediately (no time
                 // budget left to wait on the linger).
@@ -4714,7 +4863,10 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         [UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
         Log(LOG_I, @"Gracefully stopping stream before background suspension");
         NSLog(@"[InputDiag] background graceful stop: tearing stream down before suspension");
-        [self returnToMainFrameAllowingBackgroundAutoResume:YES];
+        // No budget left (expiration fallback), or no background task at all
+        // (denied): never wait for the agent's ack.
+        BOOL haveBudget = endTaskDelay > 0 && _bgGracefulStopTask != UIBackgroundTaskInvalid;
+        [self returnToMainFrameAllowingBackgroundAutoResume:YES awaitAgent:haveBudget];
     }
 
     UIBackgroundTaskIdentifier task = _bgGracefulStopTask;
@@ -4886,13 +5038,16 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 }
 
 - (void)disconnectAndQuitApp{
-    [self returnToMainFrame];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        sleep(1.5);
-        dispatch_async(dispatch_get_main_queue(), ^{
+    // Quit the host app only after the stream is really being torn down (the
+    // exit may wait for the agent's ack first), then the same ~1s the old
+    // sleep(1.5) gave (sleep() takes whole seconds) for the stop to reach the host.
+    // Strong self on purpose, as before: the VC is popped by then.
+    [self afterExitTeardown:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self.mainFrameViewcontroller quitRunningApp];
         });
-    });
+    }];
+    [self returnToMainFrame];
 }
 
 - (void) connectionStarted {
