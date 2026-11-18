@@ -11,7 +11,6 @@
 NSString * const StreamGestureBindingsDefaultsKey = @"StreamGestureBindings";
 NSString * const StreamGestureCommandDefaultsKey = @"StreamGestureCommand";
 NSString * const StreamGestureCommandNameDefaultsKey = @"StreamGestureCommandName";
-static NSString * const StreamGestureCommandOnLeaveDefaultsKey = @"StreamGestureCommandOnLeave";
 NSString * const StreamGestureBindingsMigrationDefaultsKey = @"StreamGestureBindingsMigrationV1";
 
 @implementation StreamGestureBindings
@@ -210,15 +209,6 @@ NSString * const StreamGestureBindingsMigrationDefaultsKey = @"StreamGestureBind
 + (NSString *)commandString {
     NSString *cmd = [[NSUserDefaults standardUserDefaults] stringForKey:StreamGestureCommandDefaultsKey];
     return cmd ?: @"";
-}
-
-+ (BOOL)sendCommandOnLeave {
-    id stored = [[NSUserDefaults standardUserDefaults] objectForKey:StreamGestureCommandOnLeaveDefaultsKey];
-    return stored == nil ? YES : [stored boolValue];
-}
-
-+ (void)setSendCommandOnLeave:(BOOL)enabled {
-    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:StreamGestureCommandOnLeaveDefaultsKey];
 }
 
 + (NSString *)commandDisplayName {

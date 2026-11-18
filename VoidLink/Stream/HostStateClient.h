@@ -15,6 +15,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 static const uint16_t HostStateClientDefaultPort = 48100;
 
+// "Pause Emulator When Away" (General settings, default on): the stream tells
+// the agent when the user is in it ({"cmd":"session","state":"active"|"away"}),
+// and the agent pauses / resumes an emulator running on the streamed display.
+extern NSString * const HostAgentEmulatorAutoPauseDefaultsKey;           // @"EmulatorAutoPause"
+extern NSString * const HostAgentEmulatorAutoPauseDidChangeNotification; // posted by the settings switch
+FOUNDATION_EXPORT BOOL HostAgentEmulatorAutoPauseEnabled(void);
+
 @interface HostState : NSObject
 @property (nonatomic, readonly) BOOL game;               // mode == "game"
 @property (nonatomic, readonly, copy) NSString *mode;
@@ -62,6 +69,9 @@ static const uint16_t HostStateClientDefaultPort = 48100;
 
 - (void)start;
 - (void)stop;
+// Like stop, but first sends {"cmd": command, ...} on the live link and closes
+// it only once the line is out (stop alone may drop a just-queued send).
+- (void)stopAfterSendingCommand:(NSString *)command arguments:(nullable NSDictionary<NSString *, id> *)arguments;
 
 // Sends {"cmd": command} as one JSON line to the agent. Fire-and-forget:
 // dropped (with a log line) when the link is not live. Any queue.

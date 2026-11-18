@@ -10,6 +10,7 @@
 //
 
 #import "SettingsViewController.h"
+#import "HostStateClient.h"
 #import "Connection.h"
 #import "TemporarySettings.h"
 #import "DataManager.h"
@@ -125,11 +126,11 @@ static void *VLSegmentPullDownKVOContext = &VLSegmentPullDownKVOContext;
 
 @implementation SettingsViewController {
     UISwitch *_streamTouchBlockSwitch;
-    UIStackView *_gestureCommandOnLeaveStack;
-    UISwitch *_gestureCommandOnLeaveSwitch;
     UIStackView *_streamTouchBlockStack;
     UIStackView *_modeSwitchCornerStack;
     UISwitch *_modeSwitchCornerSwitch;
+    UIStackView *_emulatorAutoPauseStack;
+    UISwitch *_emulatorAutoPauseSwitch;
     UIStackView *_swapXyStack;
     // Rows that depend on the row above them: indented 16pt in their group.
     NSSet<NSString *> *_childStackIdentifiers;
@@ -888,6 +889,23 @@ BOOL isCustomResolution(int resolutionSelected) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:StreamModeSwitchCornerDefaultsKey];
 }
 
+// "Pause Emulator When Away": the stream tells the host agent when the user
+// leaves / comes back, and the agent pauses / resumes an emulator. On by
+// default; applies at once (a running stream updates the agent).
+- (void)installEmulatorAutoPauseControl {
+    if (_emulatorAutoPauseStack) return;
+    UILabel *label = [self rowLabelWithText:[LocalizationHelper localizedStringForKey:@"Pause Emulator When Away"]];
+    _emulatorAutoPauseSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    [_emulatorAutoPauseSwitch setOn:HostAgentEmulatorAutoPauseEnabled()];
+    [_emulatorAutoPauseSwitch addTarget:self action:@selector(emulatorAutoPauseSwitchFlipped:) forControlEvents:UIControlEventValueChanged];
+    _emulatorAutoPauseStack = [self swapButtonRowWithLabel:label switch:_emulatorAutoPauseSwitch];
+}
+
+- (void)emulatorAutoPauseSwitchFlipped:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:HostAgentEmulatorAutoPauseDefaultsKey];
+    [[NSNotificationCenter defaultCenter] postNotificationName:HostAgentEmulatorAutoPauseDidChangeNotification object:nil];
+}
+
 // "Audio follows Game/Desk": game mode plays only on the iPad, desk mode keeps
 // the PC's audio and mutes the iPad (needs the host agent). While on, the
 // stream always launches with host audio on, so "Play audio on PC" is moot.
@@ -1029,23 +1047,6 @@ BOOL isCustomResolution(int resolutionSelected) {
     _gestureCommandTargetButton = [self gestureRowButtonWithSymbol:@"chevron.right"];
     [_gestureCommandTargetButton addTarget:self action:@selector(gestureCommandTargetTapped:) forControlEvents:UIControlEventTouchUpInside];
     _gestureCommandTargetStack = [self gestureRowWithLabel:commandLabel button:_gestureCommandTargetButton];
-
-    UILabel *onLeaveLabel = [self gestureRowLabelWithText:[LocalizationHelper localizedStringForKey:@"Send on Exit or Lock in 16:9 Game"]];
-    _gestureCommandOnLeaveSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
-    _gestureCommandOnLeaveSwitch.onTintColor = [ThemeManager sidebarAccent];
-    _gestureCommandOnLeaveSwitch.on = [StreamGestureBindings sendCommandOnLeave];
-    [_gestureCommandOnLeaveSwitch addTarget:self action:@selector(gestureCommandOnLeaveFlipped:) forControlEvents:UIControlEventValueChanged];
-    [_gestureCommandOnLeaveSwitch setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-    [_gestureCommandOnLeaveSwitch setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-    _gestureCommandOnLeaveStack = [[UIStackView alloc] initWithArrangedSubviews:@[onLeaveLabel, _gestureCommandOnLeaveSwitch]];
-    _gestureCommandOnLeaveStack.axis = UILayoutConstraintAxisHorizontal;
-    _gestureCommandOnLeaveStack.alignment = UIStackViewAlignmentCenter;
-    _gestureCommandOnLeaveStack.distribution = UIStackViewDistributionFill;
-    _gestureCommandOnLeaveStack.spacing = 12;
-}
-
-- (void)gestureCommandOnLeaveFlipped:(UISwitch *)sender {
-    [StreamGestureBindings setSendCommandOnLeave:sender.isOn];
 }
 
 - (UIMenu *)gestureTriggerMenuForAction:(StreamGestureAction)action {
@@ -1085,7 +1086,6 @@ BOOL isCustomResolution(int resolutionSelected) {
 
     BOOL commandBound = [StreamGestureBindings triggerForAction:StreamGestureActionGestureCommand] != StreamGestureTriggerNone;
     if (_gestureCommandTargetStack) [self setHidden:!commandBound forStack:_gestureCommandTargetStack];
-    if (_gestureCommandOnLeaveStack) [self setHidden:!commandBound forStack:_gestureCommandOnLeaveStack];
     BOOL sheetOnEdge = [StreamGestureBindings isEdgeTrigger:[StreamGestureBindings triggerForAction:StreamGestureActionSettings]]
                     || [StreamGestureBindings isEdgeTrigger:[StreamGestureBindings triggerForAction:StreamGestureActionToolbox]];
     if (self.slideToSettingsDistanceStack) [self setHidden:!sheetOnEdge forStack:self.slideToSettingsDistanceStack];
@@ -1428,7 +1428,6 @@ BOOL isCustomResolution(int resolutionSelected) {
         @"gyroModeStack", @"gyroSensitivityStack", @"gyroInvertPitchStack", @"gyroInvertYawStack",
         @"pencilHoldDelayStack", @"pencilHardPressThresholdStack",
         @"gestureCommandTargetStack",
-        @"gestureCommandOnLeaveStack",
     ]];
 
     // 1. Video
@@ -1519,7 +1518,6 @@ BOOL isCustomResolution(int resolutionSelected) {
         [self addSetting:_gestureRowStacks[action] ofId:[self gestureRowIdentifierForAction:action.integerValue] withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
         if (action.integerValue == StreamGestureActionGestureCommand) {
             [self addSetting:_gestureCommandTargetStack ofId:@"gestureCommandTargetStack" withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
-            [self addSetting:_gestureCommandOnLeaveStack ofId:@"gestureCommandOnLeaveStack" withInfoTag:NO withDynamicLabel:NO to:gesturesSection];
         }
     }
     self.slideToSettingsDistanceUILabel.text = [LocalizationHelper localizedStringForKey:@"Edge Swipe Distance"];
@@ -1541,6 +1539,8 @@ BOOL isCustomResolution(int resolutionSelected) {
     [self addSetting:self.performanceGraphStack ofId:@"performanceGraphStack" withInfoTag:YES withDynamicLabel:NO to:otherSection];
     [self addDynamicLabelForStack:self.graphOpacityStack];
     [self addSetting:self.backgroundSessionTimerStack ofId:@"backgroundSessionTimerStack" withInfoTag:NO withDynamicLabel:YES to:otherSection];
+    [self installEmulatorAutoPauseControl];
+    [self addSetting:_emulatorAutoPauseStack ofId:@"emulatorAutoPauseStack" withInfoTag:NO withDynamicLabel:NO to:otherSection];
     [self addSetting:self.unlockDisplayOrientationStack ofId:@"unlockDisplayOrientationStack" withInfoTag:YES withDynamicLabel:NO to:otherSection];
     [self addSetting:self.optimizeGamesStack ofId:@"optimizeGamesStack" withInfoTag:YES withDynamicLabel:NO to:otherSection];
     [self finishSection:otherSection];

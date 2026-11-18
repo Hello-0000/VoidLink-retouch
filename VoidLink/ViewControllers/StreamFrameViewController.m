@@ -229,8 +229,6 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     // Async probe completions check this so they never start a StreamManager or
     // a self-heal loop on a popped view controller (zombie session).
     BOOL _hasLeftStreamPage;
-    BOOL _leaveCommandSent;                       // gesture command already sent for this exit / background
-    BOOL _leaveExitPending;                       // an exit is waiting for the leave command to land
     BOOL _hasConnectionStarted;
     // Set when connectionTerminated/stageFailed reported an abnormal end. Blocks
     // clearing the dirty-session flag at teardown: after an abnormal end the host
@@ -322,6 +320,8 @@ static NSString* VLTerminationHintForErrorCode(int errorCode) {
     BOOL _oscManualVisibility;               // right-edge swipe used since the last real scene change
     HostStateClient *_hostStateClient;       // host agent link; outranks the pixel detector while live
     BOOL _hostAgentLive;
+    NSString *_emuSessionSent;               // last {"cmd":"session"} state sent on this agent link (nil: none yet)
+    BOOL _dummyEventPausedForBackground;     // keep-alive paused by didEnterBackground, resumed by didBecomeActive
     BOOL _detectorFits;                      // detector's own 16:9 verdict, kept apart from the applied one
     // The agent's game on top (lower-cased exe; nil unless the agent says
     // game) and what the per-process ratio memory needs about it.
@@ -3408,11 +3408,22 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     return YES;
 }
 
+// A link taking part in auto-pause (it sent "active" or "away") closes with a
+// final "away" that goes out before the close: the agent then acts at once
+// instead of after its grace for a dropped link, and an "away" queued just
+// before (didEnterBackground followed by an immediate stop) is flushed too.
 - (void)hostAgent_stop {
     _hostStateClient.delegate = nil;
-    [_hostStateClient stop];
+    BOOL participating = [_emuSessionSent isEqualToString:@"active"] || [_emuSessionSent isEqualToString:@"away"];
+    if (_hostAgentLive && participating) {
+        Log(LOG_I, @"[HostAgent] session -> away (closing the link)");
+        [_hostStateClient stopAfterSendingCommand:@"session" arguments:@{@"state": @"away"}];
+    } else {
+        [_hostStateClient stop];
+    }
     _hostStateClient = nil;
     _hostAgentLive = NO;
+    _emuSessionSent = nil;
     _audioRouteSent = nil;                   // the agent restores the PC's device when we disconnect
     [self audio_forgetHost];
     _nudgeGeneration++;                      // stream stop: nothing queued may reach the host
@@ -3443,9 +3454,36 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     [self osc_applyContentClass:cls fits:fits source:@"agent"];
 }
 
+// "Pause Emulator When Away": tell the agent whether the user is in the
+// stream. "active" needs the app in the foreground (active or merely inactive,
+// e.g. Control Center) and a live stream connection; background (home screen,
+// lock) or no stream (error alert, self-heal reconnect) is "away"; closing the
+// link sends a final "away" from hostAgent_stop. Turning the setting off sends
+// "off" once so the agent forgets this client; off from the start, nothing.
+- (void)emu_syncSession {
+    if (!_hostStateClient || !_hostAgentLive) return;
+    NSString *want;
+    if (HostAgentEmulatorAutoPauseEnabled()) {
+        BOOL background = [UIApplication sharedApplication].applicationState == UIApplicationStateBackground;
+        want = (!background && _streamSessionConnectionLive) ? @"active" : @"away";
+    } else {
+        want = (_emuSessionSent && ![_emuSessionSent isEqualToString:@"off"]) ? @"off" : nil;
+    }
+    if (!want || [want isEqualToString:_emuSessionSent]) return;
+    Log(LOG_I, @"[HostAgent] session -> %@", want);
+    [_hostStateClient sendCommand:@"session" arguments:@{@"state": want}];
+    _emuSessionSent = want;
+}
+
+- (void)emu_autoPauseSettingChanged:(NSNotification *)notification {
+    [self emu_syncSession];
+}
+
 - (void)hostStateClient:(HostStateClient *)client liveChanged:(BOOL)live {
     if (client != _hostStateClient) return;
     _hostAgentLive = live;
+    _emuSessionSent = nil;   // a new link is a new client on the agent side
+    if (live) [self emu_syncSession];
     _audioRouteSent = nil;   // a new link is a new owner on the agent side: resend
     _audioRetryCount = 0;
     [self audio_forgetHost];
@@ -3765,6 +3803,11 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(oscLayoutClosed)
                                                  name:@"OscLayoutCloseNotification"
+                                               object:nil];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(emu_autoPauseSettingChanged:)
+                                                 name:HostAgentEmulatorAutoPauseDidChangeNotification
                                                object:nil];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -4306,51 +4349,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     [defaults synchronize];
 }
 
-// "Send on exit or lock in a 16:9 game": fires the gesture command once while
-// the connection is still up. YES when it was sent, so the caller can give the
-// key-up events time to reach the host before tearing the stream down.
-- (BOOL)leaveCommand_sendIfNeeded {
-    if (_leaveCommandSent || !_streamSessionConnectionLive) return NO;
-    if (![StreamGestureBindings sendCommandOnLeave]) return NO;
-    if ([StreamGestureBindings triggerForAction:StreamGestureActionGestureCommand] == StreamGestureTriggerNone) return NO;
-    NSString *cmd = [StreamGestureBindings commandString];
-    if (cmd.length == 0) return NO;
-    // Built-ins act on the iPad, not the host: nothing to send on the way out.
-    NSString *upper = cmd.uppercaseString;
-    if ([upper isEqualToString:CommandManager.softKeyboardCommand] || [upper isEqualToString:CommandManager.audioOutputCommand]) return NO;
-    if ([self osc_effectiveHideMode] != OscHideModeGame || [self snap_effectiveRatioMode] != 0) return NO;
-    _leaveCommandSent = YES;
-    Log(LOG_I, @"[GestureCommand] leaving a 16:9 game stream, sending %@", cmd);
-    [_streamView sendOneShotCommand:cmd];
-    return YES;
-}
-
-// How long to hold the teardown so the leave command finishes on the host:
-// chords take up to ~350ms; explicit "…-500MS-…" waits in the command add on.
-- (NSTimeInterval)leaveCommand_settleDelay {
-    NSTimeInterval delay = 0.5;
-    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"(\\d+)MS" options:0 error:nil];
-    NSString *cmd = [StreamGestureBindings commandString].uppercaseString;
-    for (NSTextCheckingResult *m in [re matchesInString:cmd options:0 range:NSMakeRange(0, cmd.length)]) {
-        delay += [[cmd substringWithRange:[m rangeAtIndex:1]] doubleValue] / 1000.0;
-    }
-    return MIN(delay, 3.0);
-}
-
 - (void)returnToMainFrameAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
-    if (_leaveExitPending) return; // already leaving: the delayed teardown below runs once
-    if ([self leaveCommand_sendIfNeeded]) {
-        _leaveExitPending = YES;
-        __weak typeof(self) weakSelf = self;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)([self leaveCommand_settleDelay] * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [weakSelf returnToMainFrameNowAllowingBackgroundAutoResume:allowBackgroundResume];
-        });
-        return;
-    }
-    [self returnToMainFrameNowAllowingBackgroundAutoResume:allowBackgroundResume];
-}
-
-- (void)returnToMainFrameNowAllowingBackgroundAutoResume:(BOOL)allowBackgroundResume {
     [self resetFinishedStreamCountdownToIdleIfNeeded];
     _streamSessionConnectionLive = NO;
     [self endStreamSessionActivity];
@@ -4518,12 +4517,16 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         _inactivityTimer = nil;
     }
 
-    if (!_leaveExitPending) _leaveCommandSent = NO; // back in the stream: the next exit / lock sends again
-
     // Cancel any pending background graceful stop — the user came back while
     // the stream is still alive, so let it continue seamlessly.
     _bgStopEpoch++;
     [self endBackgroundGracefulStopTask];
+
+    [self emu_syncSession];   // back in the stream: the agent may resume a paused emulator
+    if (_dummyEventPausedForBackground) {
+        _dummyEventPausedForBackground = NO;
+        _dummyEventLink.paused = NO;
+    }
 
     // Check if we were in PiP
     if (self.pipController && self.pipController.isPictureInPictureActive) {
@@ -4551,7 +4554,14 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
 
 // This fires when the home button is pressed
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-    BOOL leaveCommandSent = [self leaveCommand_sendIfNeeded];
+    [self emu_syncSession];   // "away": the agent may pause an emulator on the host
+    // Nothing may reach the host as input while we're away: the agent reads any
+    // input during that time as someone using the PC. CADisplayLink stops in the
+    // background on its own; pausing it says so explicitly.
+    if (_dummyEventLink && !_dummyEventLink.paused) {
+        _dummyEventLink.paused = YES;
+        _dummyEventPausedForBackground = YES;
+    }
     [self resetFinishedStreamCountdownToIdleIfNeeded];
     [self backdrop_updateRegions]; // capsules are off screen: stop sampling (PiP keeps decoding)
 
@@ -4652,15 +4662,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
             // swipe-kill right after this leaves no zombie holding slot 0 —
             // the next session's arrival binds the right pad immediately.
             NSLog(@"[InputDiag] background disconnect setting — stopping stream now");
-            if (leaveCommandSent) {
-                // Let the leave command's key-ups reach the host first.
-                __weak typeof(self) weakSelf = self;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)([self leaveCommand_settleDelay] * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    [weakSelf performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
-                });
-            } else {
-                [self performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
-            }
+            [self performBackgroundGracefulStopForEpoch:epoch endTaskAfterDelay:4.0];
         } else {
             [self scheduleBackgroundSuspensionWatchdogForEpoch:epoch afterDelay:2.0];
         }
@@ -4898,6 +4900,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
     dispatch_async(dispatch_get_main_queue(), ^{
         self->_hasConnectionStarted = YES;
         self->_streamSessionConnectionLive = YES;
+        [self emu_syncSession];              // a stream is up again: the user is back in it
         [self beginStreamSessionActivity];
         self->_audioFollowSession = self.streamConfig.playAudioOnPC && VLAudioFollowsModeEnabled();
         self->_audioManual = AudioOutputAuto;
@@ -5014,6 +5017,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         [self resetFinishedStreamCountdownToIdleIfNeeded];
         self->_streamSessionConnectionLive = NO;
+        [self emu_syncSession];              // no stream (error alert, self-heal): the user can't be playing
         [self endStreamSessionActivity];
         
         NSString* title;
@@ -5142,6 +5146,7 @@ static const NSTimeInterval kLayoutSwitchFingerRetry = 0.5;
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         [self resetFinishedStreamCountdownToIdleIfNeeded];
         self->_streamSessionConnectionLive = NO;
+        [self emu_syncSession];              // no stream (error alert, self-heal): the user can't be playing
         [self endStreamSessionActivity];
         
         NSString* message = [NSString stringWithFormat:@"%s failed with error %d", stageName, errorCode];

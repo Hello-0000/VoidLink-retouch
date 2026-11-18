@@ -64,11 +64,6 @@ extern NSString * const StreamGestureBindingsMigrationDefaultsKey; // @"StreamGe
 + (NSString *)commandDisplayName;
 + (void)setCommandString:(NSString *)cmdString displayName:(NSString *)displayName;
 
-// Also send the gesture command when the stream is left (exit or lock /
-// background) while a 16:9 game is up. Default on.
-+ (BOOL)sendCommandOnLeave;
-+ (void)setSendCommandOnLeave:(BOOL)enabled;
-
 + (NSString *)localizedTitleForAction:(StreamGestureAction)action;
 + (NSString *)localizedTitleForTrigger:(StreamGestureTrigger)trigger;
 

@@ -776,7 +776,11 @@ static NSInteger sAliveControllerSupportCount = 0;
                                 [strongSelf neutralizeStaleInstance];
                                 return;
                             }
-                            BOOL emit = [strongSelf motionEmissionAllowed] && strongSelf->_mapGyroTo != MapGyroToOff;
+                            // Backgrounded (lock screen, home screen) the iPad is not being
+                            // aimed: send nothing. The host agent also reads input
+                            // arriving while the user is away as someone at the PC.
+                            BOOL emit = [strongSelf motionEmissionAllowed] && strongSelf->_mapGyroTo != MapGyroToOff
+                                && [UIApplication sharedApplication].applicationState != UIApplicationStateBackground;
                             // When suppressed, drop any leftover RightStick gyro
                             // contribution to 0 once. Otherwise the last non-zero
                             // value would keep blending into the physical stick.

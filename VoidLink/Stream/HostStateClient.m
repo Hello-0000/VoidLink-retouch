@@ -14,6 +14,14 @@ static const NSTimeInterval kReconnectMinDelay = 1.0;
 static const NSTimeInterval kReconnectMaxDelay = 10.0;
 static const size_t kMaxLineBytes = 64 * 1024;
 
+NSString * const HostAgentEmulatorAutoPauseDefaultsKey = @"EmulatorAutoPause";
+NSString * const HostAgentEmulatorAutoPauseDidChangeNotification = @"HostAgentEmulatorAutoPauseDidChange";
+
+BOOL HostAgentEmulatorAutoPauseEnabled(void) {
+    id stored = [[NSUserDefaults standardUserDefaults] objectForKey:HostAgentEmulatorAutoPauseDefaultsKey];
+    return stored == nil ? YES : [stored boolValue];
+}
+
 @interface HostState ()
 - (instancetype)initWithJSON:(NSDictionary *)json;
 @end
@@ -118,6 +126,44 @@ static const size_t kMaxLineBytes = 64 * 1024;
         [self queue_teardownConnection];
         [self queue_setLive:NO];
     });
+}
+
+- (void)stopAfterSendingCommand:(NSString *)command arguments:(NSDictionary<NSString *, id> *)arguments {
+    NSData *line = [HostStateClient lineForCommand:command arguments:arguments];
+    dispatch_async(_queue, ^{
+        nw_connection_t connection = self->_connection;
+        BOOL canSend = connection && self->_live && line;
+        self->_running = NO;
+        self->_generation++;
+        if (canSend) {
+            // Detach the connection so the teardown below leaves it open; the
+            // send's completion (or a 2 s safety net) closes it.
+            self->_connection = nil;
+            nw_connection_set_state_changed_handler(connection, NULL);
+        }
+        [self queue_teardownConnection];
+        [self queue_setLive:NO];
+        if (!canSend) return;
+        dispatch_data_t payload = dispatch_data_create(line.bytes, line.length, self->_queue, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+        nw_connection_send(connection, payload, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t error) {
+            if (error) Log(LOG_W, @"[HostAgent] final cmd %@ send failed: %d", command, nw_error_get_error_code(error));
+            else Log(LOG_I, @"[HostAgent] final cmd %@ sent", command);
+            nw_connection_cancel(connection);
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), self->_queue, ^{
+            nw_connection_cancel(connection);
+        });
+    });
+}
+
++ (nullable NSData *)lineForCommand:(NSString *)command arguments:(NSDictionary<NSString *, id> *)arguments {
+    NSMutableDictionary *message = [NSMutableDictionary dictionaryWithDictionary:arguments ?: @{}];
+    message[@"cmd"] = command;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:message options:0 error:nil];
+    if (!json) return nil;
+    NSMutableData *line = [json mutableCopy];
+    [line appendBytes:"\n" length:1];
+    return line;
 }
 
 - (void)sendCommand:(NSString *)command {
