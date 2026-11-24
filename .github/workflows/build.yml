@@ -1,30 +1,65 @@
 name: Build VoidLink IPA
 
 on:
-  push:
-    branches: [ "feat/frame_pacing_metal" ]
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build VoidLink IPA
-    runs-on: macos-latest
-
+    runs-on: macos-15
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
 
-      - name: Checkout submodules
-        run: "git submodule update --init --recursive"
-
-      - name: Build VoidLink
+      - name: Select Xcode
         run: |
-          xcodebuild -verbose -scheme VoidLink -sdk iphoneos -configuration Debug archive -archivePath $PWD/build/VoidLink.xcarchive CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED="NO" CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED="NO"
-          mkdir -p ./build/IPA && mkdir -p ./build/IPA/Payload
-          cp -r ./build/VoidLink.xcarchive/Products/Applications/VoidLink.app ./build/IPA/Payload/VoidLink.app
-          cd ./build/IPA && zip -r ../../build/VoidLink.ipa ./Payload/* && cd ../..
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+          xcodebuild -version
 
-      - name: Upload VoidLink IPA to Artifacts
+      - name: Patch project for personal build
+        run: |
+          set -euo pipefail
+          P=VoidLink.xcodeproj/project.pbxproj
+          sed -i '' 's/CURRENT_PROJECT_VERSION = x;/CURRENT_PROJECT_VERSION = 1;/g' "$P"
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 12.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$P"
+          sed -i '' 's/com\.voidlink\.tf\.debug10\.iOS/com.voidlink.selfbuild.debug/g' "$P"
+          sed -i '' 's/com\.voidlink\.tf\.iOS/com.voidlink.selfbuild/g' "$P"
+          sed -i '' 's/"VoidLink - beta"/"VoidLink"/g' "$P"
+          grep -nE "CURRENT_PROJECT_VERSION|IPHONEOS_DEPLOYMENT_TARGET|PRODUCT_BUNDLE_IDENTIFIER" "$P"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          COMMON=(-project VoidLink.xcodeproj -sdk iphoneos -configuration Release -arch arm64
+                  CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO CODE_SIGN_ENTITLEMENTS="")
+          HAS_SCHEME=$(xcodebuild -list -json -project VoidLink.xcodeproj \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if any("VoidLink" in s for s in d["project"].get("schemes",[])) else "no")')
+          echo "scheme available: $HAS_SCHEME"
+          if [ "$HAS_SCHEME" = "yes" ]; then
+            xcodebuild "${COMMON[@]}" -scheme VoidLink -archivePath "$PWD/build/VoidLink.xcarchive" archive
+            APP="$PWD/build/VoidLink.xcarchive/Products/Applications/VoidLink.app"
+          else
+            xcodebuild "${COMMON[@]}" -target VoidLink -configuration Release \
+              CONFIGURATION_BUILD_DIR="$PWD/build/Release-iphoneos" build
+            APP="$PWD/build/Release-iphoneos/VoidLink.app"
+          fi
+          echo "APP=$APP"
+          test -d "$APP"
+          mkdir -p build/IPA/Payload
+          cp -R "$APP" build/IPA/Payload/
+          cd build/IPA
+          zip -qry ../VoidLink.ipa Payload
+          cd ../..
+          ls -lh build/VoidLink.ipa
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist"
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: VoidLink.ipa
+          name: VoidLink-ipa
           path: build/VoidLink.ipa
+          if-no-files-found: error
+          retention-days: 7
